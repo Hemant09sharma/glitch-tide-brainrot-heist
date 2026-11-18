@@ -133,11 +133,23 @@ if vf.exists():
           f"sha256={hashlib.sha256(vf.read_bytes()).hexdigest()[:16]}...")
 
 # 5. Game content (same checks the v1.0.2 QA harness ran)
+# Expected version/roster follow the packaged game's own version — never
+# hardcoded stale numbers (v1.1 cleanup follow-up: these two checks used
+# to assert 1.0.2 / 18 unconditionally, which is wrong for a v1.1-based
+# package, mirroring the Luau-count fix above). The v1.0.2 competition
+# package holds 18 characters; a v1.1-based one holds 27.
 cfg = read("shared/Config.luau")
-check("Config.GameVersion is 1.0.2", '"1.0.2"' in cfg)
+_EXPECTED_ROSTER = {"1.0.2": 18, "1.1.0": 27}.get(_ver.group(1) if _ver else "")
+check(f"Config.GameVersion is {_ver.group(1) if _ver else '?'} "
+      f"(matches the packaged game)",
+      _ver is not None and f'"{_ver.group(1)}"' in cfg
+      and _ver.group(1) in ("1.0.2", "1.1.0"))
 chars_src = read("shared/Characters.luau")
 roster = sorted(set(re.findall(r'(?<![A-Za-z])Id\s*=\s*"([a-z0-9_]+)"', chars_src)))
-check("roster has 18 characters", len(roster) == 18, f"found {len(roster)}")
+check(f"roster has {_EXPECTED_ROSTER} characters for GameVersion "
+      f"{_ver.group(1) if _ver else '?'}",
+      _EXPECTED_ROSTER is not None and len(roster) == _EXPECTED_ROSTER,
+      f"found {len(roster)}, expected {_EXPECTED_ROSTER}")
 m = re.search(r'Config\.RarityWeights\s*=\s*\{(.*?)\n\}', cfg, re.S)
 weights = dict(re.findall(r'(\w+)\s*=\s*([0-9.]+)', m.group(1))) if m else {}
 check("RarityWeights sum to 1.0", abs(sum(map(float, weights.values())) - 1.0) < 1e-9,

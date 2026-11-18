@@ -4,7 +4,7 @@
 >
 > This is the **v1.0.0** test report (2026-11-18), kept verbatim below for
 > the record. It is **superseded by `QA_TEST_REPORT.md` (v1.0.1, then
-> v1.0.2)**. Everything in it that contradicts the QA report is outdated:
+> v1.0.2, then v1.1.0)**. Everything in it that contradicts the QA report is outdated:
 > in particular its §6 limitations (8 base plots vs MaxPlayers 12,
 > Double/Dark/GiantBoss tide variations, keybind mismatch, Magma/Spectral
 > fallback mutations, and the v1.0.0 `default.project.json` `$class`
