@@ -1,0 +1,24 @@
+# Rojo / Roblox build output
+*.rbxl
+*.rbxlx
+*.rbxm
+BrainrotBattleArena.rbxl
+
+# Rojo
+.rojo/
+
+# OS / editor clutter
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Editor / IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs and temp files
+*.log
+*.tmp
