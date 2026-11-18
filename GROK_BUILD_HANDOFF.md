@@ -75,11 +75,13 @@ should have rebound it; report the exact Output lines.
   `LICENSE` (MIT, "Glitch Tide Contributors", 2026).
 - No screenshots, recordings, or published place exist yet.
 
-**Tree completeness (v1.1.0, verified):** all 68 Luau files are present,
-every module `Main.server.luau` requires resolves, `luau-compile` passes
-68/68, and `rojo build` succeeds — see `QA_TEST_REPORT.md` §11–§13. The old
-2026-11-18 warning about missing `MapBuilder` / `GameManager` no longer
-applies.
+**Tree completeness (v1.1.0, verified):** all 68 Luau files are present
+(42,045 lines in total: 15 shared modules, 30 server services +
+`Main.server.luau`, 20 client controllers + `Main.client.luau` +
+`MainMenu.luau`), every module `Main.server.luau` requires resolves,
+`luau-compile` passes 68/68, and `rojo build` succeeds — see
+`QA_TEST_REPORT.md` §11–§13. The old 2026-11-18 warning about missing
+`MapBuilder` / `GameManager` no longer applies.
 
 **Packaging check (v1.1.0, do this in Studio after opening the place or
 syncing):** in the Explorer, confirm `StarterGui` (a real service, direct
