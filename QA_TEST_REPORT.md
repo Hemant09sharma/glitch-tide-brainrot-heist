@@ -412,7 +412,7 @@ Rojo 7.7.1 (`rojo-7.7.1-linux-x86_64.zip` — the
 | T17 | Source-to-place byte matching | `python3 scripts/verify-rbxl.py GlitchTide.rbxl` (new script; parses the rbxl chunk stream — 16-byte chunk headers, LZ4 block decompression — and compares every Source PROP value against `src/`) | **PASS 68/68.** 68 Source values in the place (66 ModuleScript + 1 LocalScript + 1 Script); every src file present byte-for-byte, no extra sources, no duplicates. Header: 10 classes, 76 instances, 26 chunks. (Parser notes: chunk headers are 16 bytes — signature, compressed length, uncompressed length, reserved u32 — not 12 as the format summary in the v1.0.1 report implied; Source is stored as String type 0x01 in this Rojo build, not ProtectedString; the INST referent encoding was not reimplemented — the hierarchy check below uses Rojo's own tree instead.) |
 | T18 | Built-hierarchy verification | `rojo serve` + `/show-instances` (Rojo's own tree, rendered from the corrected project file) | **PASS.** 77 instances (76 + DataModel root). DataModel children: ReplicatedStorage, ServerScriptService, StarterGui, StarterPlayer, Workspace. `StarterGui → MainMenu (ModuleScript)` exactly once; `StarterPlayer → StarterPlayerScripts → Main (LocalScript) + Controllers/`; `ServerScriptService → Main (Script) + Services/`; `ReplicatedStorage → 15 shared ModuleScripts`; `Workspace` empty (map built at runtime by MapBuilder). The v1.0.2 packaging fix holds. |
 | T19 | JSON validation | `python3 -c "json.load(open('default.project.json'))"` + Rojo build (T16) succeeding | **PASS.** `default.project.json` is valid JSON; `rojo.toml` present. |
-| T20 | ZIP extraction test | Unzip `GLITCH_TIDE_V1_1_EXPANDED.zip` to a fresh temp dir (`/tmp/v11_cleanroom`), `diff -r` against the project (excluding `.git`), re-run validators from the extracted copy | **PASS.** `diff -r`: identical. From the extracted copy: Python harness 70/70, Lune harness 40/40, `verify-rbxl.py` 0 failed; extracted `GlitchTide.rbxl` SHA-256 matches the build (`40f0cf4f…`). ZIP: 117 files, 1,112,596 bytes, SHA-256 `807ace1f0a45aaea9b85bcb139c3b9421e5b8e868d2e86999e30e8301608e21e`. |
+| T20 | ZIP extraction test | Unzip `GLITCH_TIDE_V1_1_EXPANDED.zip` to a fresh temp dir, `diff -r` against the project (excluding `.git`), re-run validators from the extracted copy | **PASS.** `diff -r`: identical (re-verified after the final rebuild). From the extracted copy: Python harness 70/70, Lune harness 40/40, `verify-rbxl.py` 0 failed; extracted `GlitchTide.rbxl` SHA-256 matches the build (`40f0cf4f…`). ZIP: 117 files. (The archive's own size + SHA-256 are recorded in the delivery report, not here — a file cannot truthfully print its own hash.) |
 
 ### Not applicable to the game tree (not failures)
 - `scripts/validate-package.py` is a **make.fun package** validator
@@ -480,11 +480,10 @@ they have a known defect — see `FEATURE_CHECKLIST.md` and
   all 68 script sources verified byte-for-byte inside (T17); hierarchy
   verified via Rojo's own tree (T18).
 - Final ZIP: `~/workspace/your_files/GLITCH_TIDE_V1_1_EXPANDED.zip`
-  (1,112,596 bytes, SHA-256
-  `807ace1f0a45aaea9b85bcb139c3b9421e5b8e868d2e86999e30e8301608e21e`,
-  117 files), verified by clean-room unzip + `diff -r` (identical,
+  (117 files), verified by clean-room unzip + `diff -r` (identical,
   excluding `.git`) and by re-running the harnesses from the extracted
-  copy (T20). Prior ZIPs
+  copy (T20). Final size + SHA-256 are recorded in the delivery report
+  (the archive cannot truthfully print its own hash). Prior ZIPs
   (`GLITCH_TIDE_FINAL_QA.zip`, `GLITCH_TIDE_MAKEFUN_READY.zip`,
   `GLITCH_TIDE_FINAL_SUBMISSION_CANDIDATE.zip`) are NOT overwritten.
 
