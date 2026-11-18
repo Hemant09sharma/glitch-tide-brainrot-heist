@@ -90,6 +90,31 @@ local LIST: { SynergyDef } = {
 		IncomeBonus = 0.15,
 		Description = "At least one Mechanical and one Food Brainrot together automate the kitchen and the profits.",
 	},
+	-- v1.1 (Workstream B): three new synergies the expanded roster can
+	-- actually trigger (Storm Front needs the new Electric heavies,
+	-- Void Court needs Void Vulture / Gravity Goblin, Rainbow Reef
+	-- needs Neon Narwhal / Prism Penguin).
+	{
+		Name = "Storm Front",
+		Traits = { "Electric" },
+		MinCount = 3,
+		IncomeBonus = 0.20,
+		Description = "Three or more Electric Brainrots call a permanent storm over the base — and the storm pays rent.",
+	},
+	{
+		Name = "Void Court",
+		Traits = { "Glitch", "Ancient" },
+		MinCount = 1,
+		IncomeBonus = 0.25,
+		Description = "At least one Glitch and one Ancient Brainrot together open a court in the void that taxes reality itself.",
+	},
+	{
+		Name = "Rainbow Reef",
+		Traits = { "Water", "Cosmic" },
+		MinCount = 1,
+		IncomeBonus = 0.20,
+		Description = "At least one Water and one Cosmic Brainrot together flood the base with prismatic, profitable light.",
+	},
 }
 
 function Synergies.GetAll(): { SynergyDef }

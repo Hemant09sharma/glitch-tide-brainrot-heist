@@ -11,8 +11,14 @@
 -- SetNPCService) and otherwise runs its own minimal spawn loop (parts +
 -- Humanoid that wander and damage on touch).
 --
--- OPTIONAL DEPENDENCIES: Init(dataService, map, npcService?) — the
--- NPCService argument is optional and nil-safe.
+-- v1.1: boss tides and wave bosses cohere. Every 10th wave also
+-- summons a real boss via BossService (rotating THE GLITCH COLOSSUS /
+-- THE VOID EMPEROR) when linked and no boss is live — in addition to
+-- the wave's own mini-boss, never instead of it. And no NEW wave
+-- starts while a Glitch Tide is Warning/Active: the tide owns the
+-- arena while it runs (a wave already in progress keeps running and
+-- can still be cleared for its reward). WaveNPC caps are unchanged
+-- (count = min(wave+2, Config.MaxWaveNPCs)).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -32,6 +38,11 @@ local _map: Instance? = nil
 local _npcService: any = nil
 local _questService: any = nil
 local _progressionService: any = nil
+-- v1.1: BossService + TideService links (GameManager's wireCrossLinks
+-- calls SetBossService / SetTideService on every optional service, so
+-- both are wired automatically when the services exist).
+local _bossService: any = nil
+local _tideService: any = nil
 
 local _wave: number = 0
 local _running: boolean = false
@@ -236,12 +247,26 @@ local function aliveCount(): number
 end
 
 local function broadcast()
+	local bossActive = false
+	local bossName: string? = nil
+	if _bossService and type(_bossService.IsBossActive) == "function" then
+		pcall(function()
+			bossActive = _bossService.IsBossActive() == true
+		end)
+	end
+	if bossActive and _bossService and type(_bossService.GetBossName) == "function" then
+		pcall(function()
+			bossName = _bossService.GetBossName()
+		end)
+	end
 	fireAll(_names.WaveUpdate, {
 		Wave = _wave,
 		IsBossWave = _wave > 0 and _wave % (Config.BossEvery or 5) == 0,
 		RemainingNPCs = aliveCount(),
 		TotalNPCs = #_waveNPCs,
 		NextWaveIn = 0,
+		BossActive = bossActive,
+		BossName = bossName,
 	})
 end
 
@@ -259,10 +284,27 @@ local function rewardWaveClear()
 	print(string.format("[WaveService] Wave %d cleared: +%d coins, +%d XP to all players", _wave, coins, xp))
 end
 
+local function tideActiveNow(): boolean
+	if not _tideService or type(_tideService.IsTideActive) ~= "function" then
+		return false
+	end
+	local ok, active = pcall(function()
+		return _tideService.IsTideActive()
+	end)
+	return ok and active == true
+end
+
 local function runWaves(token: number)
 	-- Grace period before wave 1 so players can join, buy and place.
 	task.wait(30)
 	while _running and token == _runToken do
+		-- v1.1: never start a new wave mid-tide (see header).
+		while _running and token == _runToken and tideActiveNow() do
+			task.wait(2)
+		end
+		if not _running or token ~= _runToken then
+			return
+		end
 		_wave += 1
 		local isBossWave = _wave % (Config.BossEvery or 5) == 0
 		local count = math.min(_wave + 2, Config.MaxWaveNPCs or 24)
@@ -283,6 +325,21 @@ local function runWaves(token: number)
 			local bossModel = spawnWaveNPC(center, true)
 			if bossModel then
 				table.insert(_waveNPCs, bossModel)
+			end
+		end
+		-- v1.1: every 10th wave ALSO summons a real boss (rotating the
+		-- v1.1 bosses) when BossService is linked. SpawnBoss returns
+		-- false when a boss is already live, so a boss tide and a
+		-- boss wave can never double-spawn. Wave 20/40/... get THE
+		-- VOID EMPEROR; other 10th waves get THE GLITCH COLOSSUS.
+		if isBossWave and _wave % 10 == 0 and _bossService
+			and type(_bossService.SpawnBoss) == "function" then
+			local bossId = (_wave % 20 == 0) and "VoidEmperor" or "GlitchColossus"
+			local ok, spawned = pcall(function()
+				return _bossService.SpawnBoss(bossId)
+			end)
+			if ok and spawned then
+				print(string.format("[WaveService] Wave %d summoned %s", _wave, bossId))
 			end
 		end
 		broadcast()
@@ -340,6 +397,21 @@ end
 
 function WaveService.SetNPCService(npcService: any)
 	_npcService = npcService
+end
+
+-- SetBossService / SetTideService (v1.1): GameManager's wireCrossLinks
+-- calls both automatically (shared setter table). Each validates the
+-- interface before accepting, so an unlinked service is nil-safe.
+function WaveService.SetBossService(bossService: any)
+	if bossService and type(bossService.SpawnBoss) == "function" then
+		_bossService = bossService
+	end
+end
+
+function WaveService.SetTideService(tideService: any)
+	if tideService and type(tideService.IsTideActive) == "function" then
+		_tideService = tideService
+	end
 end
 
 function WaveService.SetQuestService(questService: any)

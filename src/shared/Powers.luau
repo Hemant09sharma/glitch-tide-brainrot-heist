@@ -1,12 +1,12 @@
 --!strict
 -- Powers.luau
--- All abilities: 18 character primaries (one signature ability per
--- character, keyed by the character's AbilityId in Characters.luau),
--- 2 generic slot abilities (slam on F, heal on R — see Config.Keybinds)
--- usable by every character, and 12 playable powers — unlockable
--- powers any player can equip, each with a real cooldown, duration
--- and cost.
--- Total: 20 entries in Powers plus 12 entries in PlayablePowers.
+-- All abilities (v1.1, Workstream B): 27 character primaries (one
+-- signature ability per character, keyed by the character's AbilityId
+-- in Characters.luau), 2 generic slot abilities (slam on F, heal on R
+-- — see Config.Keybinds) usable by every character, and 17 playable
+-- powers — unlockable powers any player can equip, each with a real
+-- cooldown, duration and cost.
+-- Total: 29 entries in Powers plus 17 entries in PlayablePowers.
 -- Every power has a numeric cooldown of at least 3 seconds; there are
 -- no zero-cooldown powers.
 --
@@ -257,6 +257,114 @@ local LIST: { PowerDef } = {
 		Color = Color3.fromRGB(230, 190, 90),
 	},
 	{
+		Id = "phantom_flip",
+		Name = "Phantom Flip",
+		Key = "Q",
+		Cooldown = 6,
+		Damage = 20,
+		Range = 6,
+		Radius = 4,
+		Effect = "Bounce",
+		Description = "Phantom Pancake flips clean through its target and lands behind it, knocking enemies flying.",
+		Color = Color3.fromRGB(200, 120, 220),
+	},
+	{
+		Id = "prism_shatter",
+		Name = "Prism Shatter",
+		Key = "Q",
+		Cooldown = 7,
+		Damage = 30,
+		Range = 10,
+		Radius = 5,
+		Effect = "RingBlast",
+		Description = "Prism Penguin shatters a rainbow prism overhead; the shards slice every enemy in a wide ring.",
+		Color = Color3.fromRGB(255, 120, 220),
+	},
+	{
+		Id = "neon_sonar",
+		Name = "Neon Sonar",
+		Key = "Q",
+		Cooldown = 6,
+		Damage = 24,
+		Range = 11,
+		Radius = 5,
+		Effect = "Splash",
+		Description = "Neon Narwhal sings a sonar pulse that soaks and slows every enemy it washes over.",
+		Color = Color3.fromRGB(60, 220, 255),
+	},
+	{
+		Id = "reactor_overload",
+		Name = "Reactor Overload",
+		Key = "Q",
+		Cooldown = 8,
+		Damage = 36,
+		Range = 9,
+		Radius = 6,
+		Effect = "Explosion",
+		Description = "Reactor Raccoon overloads its core and detonates a green blast that flattens everything nearby.",
+		Color = Color3.fromRGB(120, 255, 90),
+	},
+	{
+		Id = "gravity_well",
+		Name = "Gravity Well",
+		Key = "Q",
+		Cooldown = 9,
+		Damage = 32,
+		Range = 8,
+		Radius = 6,
+		Effect = "Shock",
+		Description = "Gravity Goblin opens a crushing gravity well: enemies are dragged in and stunned by their own weight.",
+		Color = Color3.fromRGB(140, 90, 220),
+	},
+	{
+		Id = "thunder_shell",
+		Name = "Thunder Shell",
+		Key = "Q",
+		Cooldown = 8,
+		Damage = 40,
+		Range = 7,
+		Radius = 5,
+		Effect = "Shock",
+		Description = "Thunder Tortoise slams its storm shell down and calls lightning that stuns every enemy it touches.",
+		Color = Color3.fromRGB(255, 230, 60),
+	},
+	{
+		Id = "quantum_leap",
+		Name = "Quantum Leap",
+		Key = "Q",
+		Cooldown = 7,
+		Damage = 34,
+		Range = 10,
+		Radius = 5,
+		Effect = "GlitchTeleport",
+		Description = "Quantum Quokka leaps between universes and reappears behind its target in a burst of happy static.",
+		Color = Color3.fromRGB(120, 220, 255),
+	},
+	{
+		Id = "solar_flare",
+		Name = "Solar Flare",
+		Key = "Q",
+		Cooldown = 9,
+		Damage = 44,
+		Range = 11,
+		Radius = 6,
+		Effect = "Dazzle",
+		Description = "Solar Sloth unleashes a blinding flare from its halo, dazzling and searing every enemy in front of it.",
+		Color = Color3.fromRGB(255, 120, 40),
+	},
+	{
+		Id = "void_screech",
+		Name = "Void Screech",
+		Key = "Q",
+		Cooldown = 8,
+		Damage = 48,
+		Range = 9,
+		Radius = 6,
+		Effect = "Haunt",
+		Description = "Void Vulture screeches from the void, chilling and slowing every enemy that hears it.",
+		Color = Color3.fromRGB(170, 60, 255),
+	},
+	{
 		Id = "royal_wobble",
 		Name = "Royal Wobble",
 		Key = "Q",
@@ -302,8 +410,9 @@ for _, def in LIST do
 	BY_ID[def.Id] = def
 end
 
--- Playable powers: unlockable with coins, usable by any player
--- regardless of character. All cooldowns are at least 4 seconds and
+-- Playable powers (v1.1: 17, was 12): unlockable with coins, usable
+-- by any player regardless of character. All cooldowns are at least 4
+-- seconds (the 5 new powers are 10-25s) and
 -- all durations are positive, so no power can be spammed or held
 -- permanently.
 local PLAYABLE_LIST: { PlayablePowerDef } = {
@@ -463,6 +572,71 @@ local PLAYABLE_LIST: { PlayablePowerDef } = {
 		Description = "Unleash raw chaos for 3 seconds: a massive burst that damages every enemy within 8 studs.",
 		Color = Color3.fromRGB(255, 60, 120),
 	},
+	{
+		Id = "time_rewind",
+		Name = "Time Rewind",
+		Cooldown = 20,
+		Duration = 3,
+		Cost = 5000,
+		Damage = 0,
+		Range = 0,
+		Radius = 0,
+		Effect = "TimeRewind",
+		Description = "Rewind yourself 3 seconds: restore the health and position you had 3 seconds ago. Cannot rewind death.",
+		Color = Color3.fromRGB(90, 220, 255),
+	},
+	{
+		Id = "meteor_shower",
+		Name = "Meteor Shower",
+		Cooldown = 18,
+		Duration = 3,
+		Cost = 4500,
+		Damage = 45,
+		Range = 12,
+		Radius = 10,
+		Effect = "MeteorShower",
+		Description = "Call down 5 pastry meteors over 3 seconds around you, each blasting enemies near its impact.",
+		Color = Color3.fromRGB(255, 140, 40),
+	},
+	{
+		Id = "void_dash",
+		Name = "Void Dash",
+		Cooldown = 10,
+		Duration = 0.5,
+		Cost = 3500,
+		Damage = 15,
+		Range = 14,
+		Radius = 3,
+		Effect = "VoidDash",
+		Description = "Dash through the void: blink forward up to 14 studs, briefly untouchable, slicing enemies you pass through.",
+		Color = Color3.fromRGB(170, 60, 255),
+	},
+	{
+		Id = "gravity_crush",
+		Name = "Gravity Crush",
+		Cooldown = 22,
+		Duration = 2,
+		Cost = 5500,
+		Damage = 40,
+		Range = 0,
+		Radius = 7,
+		Effect = "GravityCrush",
+		Description = "Crush gravity in a 7-stud radius for 2 seconds: enemies take heavy damage, are dragged toward you and cannot move.",
+		Color = Color3.fromRGB(140, 90, 220),
+	},
+	{
+		Id = "dimensional_prison",
+		Name = "Dimensional Prison",
+		Cooldown = 25,
+		Duration = 5,
+		Cost = 6000,
+		Damage = 10,
+		Range = 12,
+		Radius = 6,
+		Effect = "DimensionalPrison",
+		Description = "Trap the nearest enemy within 12 studs in a dimensional prison for 5 seconds: it cannot move or jump.",
+		Color = Color3.fromRGB(80, 200, 255),
+	},
 }
 
 local PLAYABLE_BY_ID: { [string]: PlayablePowerDef } = {}
@@ -521,6 +695,36 @@ end
 
 function Powers.GetPlayablePower(id: string): PlayablePowerDef?
 	return PLAYABLE_BY_ID[id]
+end
+
+-- ---------------------------------------------------------------------------
+-- Power mastery (v1.1, Workstream B). Every successful UsePower awards
+-- XP for that power (AbilityService awards 10 XP per use). Levels are
+-- 0-5; each level adds +5% damage and -2% cooldown (cooldown never
+-- drops below 3s — enforced in AbilityService, not here).
+-- ---------------------------------------------------------------------------
+Powers.MASTERY_MAX_LEVEL = 5
+Powers.MASTERY_XP_PER_LEVEL = { 100, 250, 500, 1000, 2000 }
+
+function Powers.GetMasteryLevel(xp: number): number
+	local total = math.max(0, math.floor(tonumber(xp) or 0))
+	local level = 0
+	for i, needed in ipairs(Powers.MASTERY_XP_PER_LEVEL) do
+		if total >= needed then
+			level = i
+		else
+			break
+		end
+	end
+	return math.min(level, Powers.MASTERY_MAX_LEVEL)
+end
+
+function Powers.GetMasteryDamageMultiplier(level: number): number
+	return 1 + 0.05 * math.clamp(math.floor(tonumber(level) or 0), 0, Powers.MASTERY_MAX_LEVEL)
+end
+
+function Powers.GetMasteryCooldownMultiplier(level: number): number
+	return 1 - 0.02 * math.clamp(math.floor(tonumber(level) or 0), 0, Powers.MASTERY_MAX_LEVEL)
 end
 
 return Powers

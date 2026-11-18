@@ -15,6 +15,19 @@ local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 local EconomyService = {}
 
 local _dataService = nil
+-- v1.1 (Workstream B) INCOME HOOK ONLY: CompanionService registers
+-- itself here via SetCompanionService (called from
+-- CompanionService.Init, or by GameManager). GetCompanionIncomeMultiplier
+-- below delegates to it. The REAL income flow is
+-- BaseService.GetIncomePerSec (audit §4f: this service has no
+-- AddCoins/AddGems API; coins move via DataService.AddCoins and
+-- income is computed only in BaseService). BaseService must multiply
+-- its total by GetCompanionIncomeMultiplier(player) — one new setter
+-- + one line inside BaseService, owned by the BaseService workstream
+-- (BaseService has no SetEconomyService setter today). Until that
+-- lands the hook is computed + exposed but not applied to banked
+-- income. No other method in this file is changed.
+local _companionService: any = nil
 local _lastBuy: { [Player]: number } = {}
 
 -- Burst-limit state lives in SecurityService (BurstLimit); require it
@@ -273,6 +286,29 @@ function EconomyService.BuyCharacter(player, characterId)
 		player.Name, characterId, cost
 	))
 	return true, characterId
+end
+
+-- SetCompanionService(companionService): register the companion
+-- service so the income hook below can delegate to it. Accepts nil
+-- (unregisters). Called by CompanionService.Init.
+function EconomyService.SetCompanionService(companionService: any)
+	_companionService = companionService
+end
+
+-- GetCompanionIncomeMultiplier(player): 1 + the player's companion
+-- IncomeBonus (max 1.25), or 1 when no companion service is linked.
+-- BaseService.GetIncomePerSec should multiply its total by this value.
+-- Safe to call before any wiring: it never errors, it just returns 1.
+function EconomyService.GetCompanionIncomeMultiplier(player: Player): number
+	if _companionService ~= nil and type(_companionService.GetIncomeMultiplier) == "function" then
+		local ok, value = pcall(function()
+			return _companionService.GetIncomeMultiplier(player)
+		end)
+		if ok and type(value) == "number" and value >= 1 then
+			return math.min(value, 1.25)
+		end
+	end
+	return 1
 end
 
 function EconomyService.GetBalance(player)

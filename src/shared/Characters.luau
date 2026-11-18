@@ -1,6 +1,6 @@
 --!strict
 -- Characters.luau
--- The 18 collectible Brainrots of Glitch Tide — Brainrot Heist: The
+-- The 27 collectible Brainrots of Glitch Tide (v1.1: 18 original + 9 new) — Brainrot Heist: The
 -- Memeverse. All 18 are ORIGINAL characters created for this game: each
 -- one has a distinct silhouette, body shape, signature prop and colour
 -- palette — never a recolour of another entry. CharacterModels.luau
@@ -12,9 +12,19 @@
 export type BuildSpec = {
 	BodyColor: Color3,
 	HeadColor: Color3,
-	BodyShape: string, -- "Waffle" | "Turnip" | "Jelly" | "Comet" | "Noodle" | "ToastGhost" | "Dumpling" | "PicklePirate" | "Mochi" | "Gumball" | "SoupShip" | "Puddle" | "Spaghetti" | "Zucchini" | "Cupcake" | "Goose" | "Crab" | "WobbleKing"
+	BodyShape: string, -- "Waffle" | "Turnip" | "Jelly" | "Comet" | "Noodle" | "ToastGhost" | "Dumpling" | "PicklePirate" | "Mochi" | "Gumball" | "SoupShip" | "Puddle" | "Spaghetti" | "Zucchini" | "Cupcake" | "Goose" | "Crab" | "WobbleKing" | "Pancake" | "PrismPenguin" | "Narwhal" | "Raccoon" | "Goblin" | "Tortoise" | "Quokka" | "Sloth" | "Vulture"
 	Prop: string,
 	PropColor: Color3,
+}
+
+-- CompanionAbility (v1.1, Workstream B): the passive a Brainrot grants
+-- its owner just by being owned (see shared/Companions.luau for the
+-- kind table and caps). Kind is one of "IncomeBonus" | "TideProtection"
+-- | "RareDetection" | "CarrySpeed" | "RaidDetection" | "MutationBonus";
+-- Value is a fraction (0.05 = +5%). No single companion exceeds 0.20.
+export type CompanionAbilityDef = {
+	Kind: string,
+	Value: number,
 }
 
 export type CharacterDef = {
@@ -37,6 +47,7 @@ export type CharacterDef = {
 	MutationCompatibility: { string }, -- mutation Ids this character can receive
 	Personality: string,
 	UnlockCondition: string,
+	CompanionAbility: CompanionAbilityDef?,
 	BuildSpec: BuildSpec,
 }
 
@@ -67,6 +78,7 @@ local LIST: { CharacterDef } = {
 		Scale = 0.95,
 		MutationCompatibility = { "Golden", "Electric", "Frozen", "Toxic", "Rainbow", "Ancient", "Cosmic", "Glitched" },
 		Personality = "Cheerful and wobbly; never stops jiggling, even when startled.",
+		CompanionAbility = { Kind = "IncomeBonus", Value = 0.05 },
 		UnlockCondition = "Starter — given to every new player.",
 		BuildSpec = {
 			BodyColor = Color3.fromRGB(214, 164, 65),
@@ -95,6 +107,7 @@ local LIST: { CharacterDef } = {
 		Scale = 0.95,
 		MutationCompatibility = { "Golden", "Electric", "Frozen", "Toxic", "Rainbow", "Shadow", "Cosmic", "Glitched" },
 		Personality = "Impatient speedster; treats every hallway like a racetrack.",
+		CompanionAbility = { Kind = "CarrySpeed", Value = 0.05 },
 		UnlockCondition = "Buy from the conveyor for 120 coins.",
 		BuildSpec = {
 			BodyColor = Color3.fromRGB(200, 120, 220),
@@ -297,6 +310,7 @@ local LIST: { CharacterDef } = {
 		Scale = 1.0,
 		MutationCompatibility = { "Golden", "Frozen", "Rainbow", "Shadow", "Cosmic", "Glitched", "Celestial", "Diamond" },
 		Personality = "Serene and soft; hums lullabies while guarding the base.",
+		CompanionAbility = { Kind = "TideProtection", Value = 0.10 },
 		UnlockCondition = "Buy from the conveyor for 6000 coins.",
 		BuildSpec = {
 			BodyColor = Color3.fromRGB(245, 245, 255),
@@ -441,6 +455,7 @@ local LIST: { CharacterDef } = {
 		Scale = 1.1,
 		MutationCompatibility = { "Golden", "Electric", "Rainbow", "Shadow", "Glitched", "Cosmic", "Celestial", "Diamond", "Ancient", "Void" },
 		Personality = "Buzzing with energy; finishes other people's sentences with static.",
+		CompanionAbility = { Kind = "MutationBonus", Value = 0.05 },
 		UnlockCondition = "Buy from the conveyor for 60000 coins.",
 		BuildSpec = {
 			BodyColor = Color3.fromRGB(90, 200, 80),
@@ -501,6 +516,7 @@ local LIST: { CharacterDef } = {
 		Scale = 1.1,
 		MutationCompatibility = { "Golden", "Rainbow", "Shadow", "Glitched", "Cosmic", "Celestial", "Diamond", "Void", "Ancient" },
 		Personality = "Chaotic and honking; exists in three places at once, none of them helpful.",
+		CompanionAbility = { Kind = "RareDetection", Value = 0.10 },
 		UnlockCondition = "Buy from the conveyor for 250000 coins.",
 		BuildSpec = {
 			BodyColor = Color3.fromRGB(240, 240, 245),
@@ -531,6 +547,7 @@ local LIST: { CharacterDef } = {
 		Scale = 1.2,
 		MutationCompatibility = { "Golden", "Rainbow", "Shadow", "Cosmic", "Celestial", "Diamond", "Ancient", "Void" },
 		Personality = "Slow, rich and menacing; clicks its claws when it is pleased.",
+		CompanionAbility = { Kind = "RaidDetection", Value = 0.15 },
 		UnlockCondition = "Buy from the conveyor for 500000 coins.",
 		BuildSpec = {
 			BodyColor = Color3.fromRGB(200, 130, 50),
@@ -570,6 +587,285 @@ local LIST: { CharacterDef } = {
 			PropColor = Color3.fromRGB(120, 60, 200),
 		},
 	},
+	-- Common --------------------------------------------------------------
+	{
+		Id = "phantom_pancake",
+		Name = "Phantom Pancake",
+		DisplayName = "Phantom Pancake",
+		Rarity = "Common",
+		Cost = 250,
+		IncomePerSec = 7,
+		Description = "A shy little pancake that turned see-through after one too many syrup spills. It flips away whenever anyone looks directly at it — and flips straight back with your coins.",
+		Health = 100,
+		Speed = 18,
+		Damage = 12,
+		AbilityId = "phantom_flip",
+		DefenseTrait = "PhaseShift",
+		Traits = { "Food", "Glitch" },
+		Color = Color3.fromRGB(240, 210, 140),
+		AccentColor = Color3.fromRGB(200, 120, 220),
+		Scale = 0.95,
+		MutationCompatibility = { "Golden", "Frozen", "Rainbow", "Shadow", "Glitched", "Cosmic" },
+		Personality = "Shy and see-through; flips away whenever anyone looks directly at it.",
+		UnlockCondition = "Buy from the conveyor for 250 coins.",
+		CompanionAbility = { Kind = "TideProtection", Value = 0.05 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(240, 210, 140),
+			HeadColor = Color3.fromRGB(250, 225, 170),
+			BodyShape = "Pancake",
+			Prop = "GhostSyrup",
+			PropColor = Color3.fromRGB(200, 120, 220),
+		},
+	},
+
+	-- Uncommon ------------------------------------------------------------
+	{
+		Id = "prism_penguin",
+		Name = "Prism Penguin",
+		DisplayName = "Prism Penguin",
+		Rarity = "Uncommon",
+		Cost = 550,
+		IncomePerSec = 12,
+		Description = "A dapper penguin whose feathers refract every colour of the Memeverse. It waddles through your base leaving little rainbows — and a trail of loose coins — behind it.",
+		Health = 130,
+		Speed = 14,
+		Damage = 16,
+		AbilityId = "prism_shatter",
+		DefenseTrait = "Bouncy",
+		Traits = { "Water", "Cosmic" },
+		Color = Color3.fromRGB(120, 180, 255),
+		AccentColor = Color3.fromRGB(255, 120, 220),
+		Scale = 1.0,
+		MutationCompatibility = { "Golden", "Frozen", "Rainbow", "Cosmic", "Glitched", "Diamond" },
+		Personality = "Waddles in rainbows; refracts light and compliments wherever it goes.",
+		UnlockCondition = "Buy from the conveyor for 550 coins.",
+		CompanionAbility = { Kind = "RareDetection", Value = 0.05 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(120, 180, 255),
+			HeadColor = Color3.fromRGB(160, 205, 255),
+			BodyShape = "PrismPenguin",
+			Prop = "PrismFeather",
+			PropColor = Color3.fromRGB(255, 120, 220),
+		},
+	},
+
+	-- Rare ----------------------------------------------------------------
+	{
+		Id = "neon_narwhal",
+		Name = "Neon Narwhal",
+		DisplayName = "Neon Narwhal",
+		Rarity = "Rare",
+		Cost = 2000,
+		IncomePerSec = 50,
+		Description = "A glowing narwhal that swims through the air, singing in neon. Its sonar lights up the whole market — rare Brainrots practically swim toward it.",
+		Health = 150,
+		Speed = 19,
+		Damage = 24,
+		AbilityId = "neon_sonar",
+		DefenseTrait = "Swift",
+		Traits = { "Water", "Electric" },
+		Color = Color3.fromRGB(60, 220, 255),
+		AccentColor = Color3.fromRGB(255, 60, 200),
+		Scale = 1.05,
+		MutationCompatibility = { "Golden", "Electric", "Rainbow", "Shadow", "Cosmic", "Glitched", "Celestial" },
+		Personality = "Sings in neon; its sonar lights up the whole market.",
+		UnlockCondition = "Buy from the conveyor for 2000 coins.",
+		CompanionAbility = { Kind = "IncomeBonus", Value = 0.05 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(60, 220, 255),
+			HeadColor = Color3.fromRGB(120, 235, 255),
+			BodyShape = "Narwhal",
+			Prop = "NeonHorn",
+			PropColor = Color3.fromRGB(255, 60, 200),
+		},
+	},
+
+	-- Epic ----------------------------------------------------------------
+	{
+		Id = "reactor_raccoon",
+		Name = "Reactor Raccoon",
+		DisplayName = "Reactor Raccoon",
+		Rarity = "Epic",
+		Cost = 7000,
+		IncomePerSec = 130,
+		Description = "A masked tinkerer with a tiny reactor core strapped to its back. It hums when it is about to blow — and when it blows, it blows up the other team's plans, not yours.",
+		Health = 190,
+		Speed = 20,
+		Damage = 30,
+		AbilityId = "reactor_overload",
+		DefenseTrait = "Armored",
+		Traits = { "Mechanical", "Electric" },
+		Color = Color3.fromRGB(90, 90, 110),
+		AccentColor = Color3.fromRGB(120, 255, 90),
+		Scale = 1.05,
+		MutationCompatibility = { "Golden", "Electric", "Rainbow", "Shadow", "Glitched", "Cosmic", "Diamond", "Ancient" },
+		Personality = "Tinkers with a tiny reactor core; hums when it is about to blow.",
+		UnlockCondition = "Buy from the conveyor for 7000 coins.",
+		CompanionAbility = { Kind = "MutationBonus", Value = 0.10 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(90, 90, 110),
+			HeadColor = Color3.fromRGB(120, 120, 145),
+			BodyShape = "Raccoon",
+			Prop = "ReactorCore",
+			PropColor = Color3.fromRGB(120, 255, 90),
+		},
+	},
+
+	-- Legendary -----------------------------------------------------------
+	{
+		Id = "gravity_goblin",
+		Name = "Gravity Goblin",
+		DisplayName = "Gravity Goblin",
+		Rarity = "Legendary",
+		Cost = 18000,
+		IncomePerSec = 300,
+		Description = "A grumpy little gravity wizard in a pointed hat, floating a hand's breadth off the floor. It drops things just to watch them fall up — including thieves.",
+		Health = 210,
+		Speed = 16,
+		Damage = 34,
+		AbilityId = "gravity_well",
+		DefenseTrait = "Shielded",
+		Traits = { "Cosmic", "Ancient" },
+		Color = Color3.fromRGB(140, 90, 220),
+		AccentColor = Color3.fromRGB(255, 220, 80),
+		Scale = 1.0,
+		MutationCompatibility = { "Golden", "Rainbow", "Shadow", "Cosmic", "Glitched", "Celestial", "Diamond", "Ancient", "Void" },
+		Personality = "Grumpy little gravity wizard; drops things just to watch them fall up.",
+		UnlockCondition = "Buy from the conveyor for 18000 coins.",
+		CompanionAbility = { Kind = "CarrySpeed", Value = 0.10 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(140, 90, 220),
+			HeadColor = Color3.fromRGB(170, 120, 240),
+			BodyShape = "Goblin",
+			Prop = "GravityOrb",
+			PropColor = Color3.fromRGB(255, 220, 80),
+		},
+	},
+
+	-- Mythic --------------------------------------------------------------
+	{
+		Id = "thunder_tortoise",
+		Name = "Thunder Tortoise",
+		DisplayName = "Thunder Tortoise",
+		Rarity = "Mythic",
+		Cost = 50000,
+		IncomePerSec = 900,
+		Description = "An ancient tortoise with a storm cloud for a shell. Lightning naps on its back, and it has not hurried for anything in three hundred years — it has never needed to.",
+		Health = 320,
+		Speed = 12,
+		Damage = 40,
+		AbilityId = "thunder_shell",
+		DefenseTrait = "Armored",
+		Traits = { "Electric", "Ancient" },
+		Color = Color3.fromRGB(70, 140, 90),
+		AccentColor = Color3.fromRGB(255, 230, 60),
+		Scale = 1.3,
+		MutationCompatibility = { "Golden", "Electric", "Rainbow", "Shadow", "Glitched", "Cosmic", "Celestial", "Diamond", "Ancient", "Void" },
+		Personality = "Ancient, slow and unbothered; lightning naps on its shell.",
+		UnlockCondition = "Buy from the conveyor for 50000 coins.",
+		CompanionAbility = { Kind = "TideProtection", Value = 0.15 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(70, 140, 90),
+			HeadColor = Color3.fromRGB(100, 170, 115),
+			BodyShape = "Tortoise",
+			Prop = "StormShell",
+			PropColor = Color3.fromRGB(255, 230, 60),
+		},
+	},
+
+	-- Divine --------------------------------------------------------------
+	{
+		Id = "quantum_quokka",
+		Name = "Quantum Quokka",
+		DisplayName = "Quantum Quokka",
+		Rarity = "Divine",
+		Cost = 150000,
+		IncomePerSec = 2800,
+		Description = "The happiest creature in two universes at once. It smiles in superposition — you can never tell which quokka is the real one, and neither can the thieves.",
+		Health = 230,
+		Speed = 24,
+		Damage = 42,
+		AbilityId = "quantum_leap",
+		DefenseTrait = "Swift",
+		Traits = { "Cosmic", "Glitch" },
+		Color = Color3.fromRGB(255, 200, 120),
+		AccentColor = Color3.fromRGB(120, 220, 255),
+		Scale = 1.05,
+		MutationCompatibility = { "Golden", "Rainbow", "Shadow", "Cosmic", "Glitched", "Celestial", "Diamond", "Void", "Ancient" },
+		Personality = "The happiest creature in two universes at once; smiles in superposition.",
+		UnlockCondition = "Buy from the conveyor for 150000 coins.",
+		CompanionAbility = { Kind = "RareDetection", Value = 0.15 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(255, 200, 120),
+			HeadColor = Color3.fromRGB(255, 220, 160),
+			BodyShape = "Quokka",
+			Prop = "QuantumTwin",
+			PropColor = Color3.fromRGB(120, 220, 255),
+		},
+	},
+
+	-- Celestial -----------------------------------------------------------
+	{
+		Id = "solar_sloth",
+		Name = "Solar Sloth",
+		DisplayName = "Solar Sloth",
+		Rarity = "Celestial",
+		Cost = 300000,
+		IncomePerSec = 5500,
+		Description = "A golden sloth draped in a sunbeam, moving at the exact speed of sunlight. It judges everyone from its halo — and pays your vault for the privilege of watching.",
+		Health = 260,
+		Speed = 10,
+		Damage = 46,
+		AbilityId = "solar_flare",
+		DefenseTrait = "Shielded",
+		Traits = { "Cosmic", "Royal" },
+		Color = Color3.fromRGB(255, 220, 100),
+		AccentColor = Color3.fromRGB(255, 120, 40),
+		Scale = 1.2,
+		MutationCompatibility = { "Golden", "Rainbow", "Shadow", "Cosmic", "Glitched", "Celestial", "Diamond", "Void", "Ancient" },
+		Personality = "Moves at the speed of sunlight and judges everyone from its sunbeam.",
+		UnlockCondition = "Buy from the conveyor for 300000 coins.",
+		CompanionAbility = { Kind = "IncomeBonus", Value = 0.15 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(255, 220, 100),
+			HeadColor = Color3.fromRGB(255, 235, 150),
+			BodyShape = "Sloth",
+			Prop = "SunHalo",
+			PropColor = Color3.fromRGB(255, 120, 40),
+		},
+	},
+
+	-- Secret --------------------------------------------------------------
+	{
+		Id = "void_vulture",
+		Name = "Void Vulture",
+		DisplayName = "Void Vulture",
+		Rarity = "Secret",
+		Cost = 600000,
+		IncomePerSec = 11000,
+		Description = "A vast black vulture with wings like torn night sky, circling the void above your base. It screeches at thieves until they forget why they came — and drop everything.",
+		Health = 340,
+		Speed = 22,
+		Damage = 52,
+		AbilityId = "void_screech",
+		DefenseTrait = "GlitchField",
+		Traits = { "Glitch", "Ancient" },
+		Color = Color3.fromRGB(40, 20, 70),
+		AccentColor = Color3.fromRGB(170, 60, 255),
+		Scale = 1.25,
+		MutationCompatibility = { "Golden", "Rainbow", "Shadow", "Cosmic", "Glitched", "Celestial", "Diamond", "Void", "Ancient" },
+		Personality = "Circles the void and screeches at thieves until they forget why they came.",
+		UnlockCondition = "Buy from the conveyor for 600000 coins.",
+		CompanionAbility = { Kind = "RaidDetection", Value = 0.20 },
+		BuildSpec = {
+			BodyColor = Color3.fromRGB(40, 20, 70),
+			HeadColor = Color3.fromRGB(70, 40, 110),
+			BodyShape = "Vulture",
+			Prop = "VoidFeathers",
+			PropColor = Color3.fromRGB(170, 60, 255),
+		},
+	},
+
 }
 
 local BY_ID: { [string]: CharacterDef } = {}
@@ -653,6 +949,16 @@ function Characters.GetByRarity(rarity: string): { CharacterDef }
 		return a.Cost < b.Cost
 	end)
 	return out
+end
+
+-- CompanionAbility for a character Id, or nil when the character has
+-- none (older saves / characters without a companion passive).
+function Characters.GetCompanionAbility(characterId: string): CompanionAbilityDef?
+	local def = BY_ID[characterId]
+	if def == nil then
+		return nil
+	end
+	return def.CompanionAbility
 end
 
 function Characters.GetByTrait(trait: string): { CharacterDef }

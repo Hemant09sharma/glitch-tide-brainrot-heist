@@ -39,6 +39,22 @@
 --   rift_hook      velocity pull toward a raycast anchor (<= 30 studs)
 --   chaos_burst    radial knockback + 10 damage within 12 studs
 --   time_distortion nearby enemies slowed 50% for 5s
+-- v1.1 (Workstream B): 5 new powers, all fully wired here with server
+-- validation + cooldowns from the shared defs (never below 3s):
+--   time_rewind      restore health + position from 3s ago (snapshots
+--                    taken every 0.5s; cannot rewind death)
+--   meteor_shower    5 pastry meteors over 3s around the player
+--   void_dash        blink up to 14 studs, briefly untouchable, slices
+--                    enemies passed through
+--   gravity_crush    7-stud crush: damage + drag-in + rooted 2s
+--   dimensional_prison nearest enemy in 12 studs caged 5s (no move/jump)
+-- Power mastery (v1.1): +10 XP per successful use per power, levels
+-- 0-5 (Powers.GetMasteryLevel); each level +5% damage, -2% cooldown
+-- (cooldown floored at 3s). XP lives in data.PowerMastery and is
+-- persisted via GetMasteryStateForSave / LoadMasteryState.
+-- FX (v1.1): every successful use also fires a positional SpawnEffect
+-- ring/flash in the power's colour — the positional form
+-- EffectsController actually handles ("ring"/"flash"/"poof").
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -62,6 +78,14 @@ local _cooldowns: { [Player]: { [string]: number } } = {}
 local _lastUse: { [Player]: number } = {}
 -- Local Tide Surfer immunity (used when no TideService is linked).
 local _surfers: { [Player]: number } = {}
+-- Power mastery XP per player per power id (v1.1). Mirrored into
+-- data.PowerMastery when a DataService is present so it persists.
+local _masteryXP: { [Player]: { [string]: number } } = {}
+-- Time Rewind snapshots: ring buffer of {Position, Health} taken every
+-- 0.5s per player (v1.1). Oldest entry is ~3s old (7 entries).
+local _snapshots: { [Player]: { { Position: Vector3, Health: number } } } = {}
+local MASTERY_XP_PER_USE = 10
+local MIN_COOLDOWN_SECONDS = 3
 
 local Security: any = nil
 pcall(function()
@@ -152,7 +176,7 @@ local function getData(player: Player): any
 end
 
 -- Shared playable-power def (Powers.GetPlayablePower), or nil when the
--- id is not one of the 12 loadout powers. This is the ONLY place power
+-- id is not one of the 17 loadout powers. This is the ONLY place power
 -- tuning is read from — no local cooldown/cost table exists anymore.
 local function getPlayableDef(powerId: string): any
 	if Powers and type(Powers.GetPlayablePower) == "function" then
@@ -172,6 +196,78 @@ local function getCooldownSeconds(powerId: string): number
 		return tonumber(def.Cooldown) :: number
 	end
 	return FALLBACK_COOLDOWN
+end
+
+-- Mastery: XP / level for a player + power. Reads the in-memory table
+-- first, falls back to data.PowerMastery (loaded saves).
+local function getMasteryXP(player: Player, powerId: string): number
+	local perPlayer = _masteryXP[player]
+	if perPlayer ~= nil and type(perPlayer[powerId]) == "number" then
+		return perPlayer[powerId]
+	end
+	local data = getData(player)
+	if data ~= nil and type(data.PowerMastery) == "table" then
+		return tonumber(data.PowerMastery[powerId]) or 0
+	end
+	return 0
+end
+
+local function getMasteryLevel(player: Player, powerId: string): number
+	if Powers and type(Powers.GetMasteryLevel) == "function" then
+		local ok, level = pcall(function()
+			return Powers.GetMasteryLevel(getMasteryXP(player, powerId))
+		end)
+		if ok and type(level) == "number" then
+			return level
+		end
+	end
+	return 0
+end
+
+-- Effective cooldown for a player + power: shared cooldown reduced by
+-- mastery (-2%/level), never below 3s.
+local function getEffectiveCooldown(player: Player, powerId: string): number
+	local base = getCooldownSeconds(powerId)
+	if Powers and type(Powers.GetMasteryCooldownMultiplier) == "function" then
+		local ok, mult = pcall(function()
+			return Powers.GetMasteryCooldownMultiplier(getMasteryLevel(player, powerId))
+		end)
+		if ok and type(mult) == "number" then
+			base *= mult
+		end
+	end
+	return math.max(MIN_COOLDOWN_SECONDS, base)
+end
+
+-- Effective damage for a player + power: shared damage scaled by
+-- mastery (+5%/level). Healing (negative damage) is NOT scaled.
+local function getEffectiveDamage(player: Player, powerId: string, baseDamage: number): number
+	if baseDamage <= 0 then
+		return baseDamage
+	end
+	if Powers and type(Powers.GetMasteryDamageMultiplier) == "function" then
+		local ok, mult = pcall(function()
+			return Powers.GetMasteryDamageMultiplier(getMasteryLevel(player, powerId))
+		end)
+		if ok and type(mult) == "number" then
+			return math.floor(baseDamage * mult + 0.5)
+		end
+	end
+	return baseDamage
+end
+
+-- Award mastery XP for a successful use and mirror it into the
+-- player's data table (persisted on the next DataService save).
+local function awardMasteryXP(player: Player, powerId: string)
+	_masteryXP[player] = _masteryXP[player] or {}
+	_masteryXP[player][powerId] = (_masteryXP[player][powerId] or 0) + MASTERY_XP_PER_USE
+	local data = getData(player)
+	if data ~= nil then
+		if type(data.PowerMastery) ~= "table" then
+			data.PowerMastery = {}
+		end
+		data.PowerMastery[powerId] = _masteryXP[player][powerId]
+	end
 end
 
 local function getRoot(player: Player): BasePart?
@@ -295,7 +391,7 @@ local function applyEffect(player: Player, powerId: string): boolean
 		return false
 	end
 	local duration = tonumber(def.Duration) or 0
-	local damage = tonumber(def.Damage) or 0
+	local damage = getEffectiveDamage(player, powerId, tonumber(def.Damage) or 0)
 	local range = tonumber(def.Range) or 0
 	local radius = tonumber(def.Radius) or 0
 
@@ -510,6 +606,173 @@ local function applyEffect(player: Player, powerId: string): boolean
 			end
 			applyVelocity(target.Root, away.Unit * 40 + Vector3.new(0, 8, 0), 0.25)
 		end
+	elseif powerId == "time_rewind" then
+		-- Restore the oldest snapshot (~3s ago): position + health.
+		-- Cannot rewind death (caller already checks Health > 0) and
+		-- fails cleanly when no snapshot exists yet (first 0.5s).
+		local snaps = _snapshots[player]
+		if snaps == nil or #snaps == 0 then
+			return false
+		end
+		local snap = snaps[1]
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = { character }
+		local hit = workspace:Raycast(snap.Position + Vector3.new(0, 4, 0), Vector3.new(0, -14, 0), params)
+		if hit then
+			root.CFrame = CFrame.new(snap.Position.X, hit.Position.Y + 3, snap.Position.Z)
+		else
+			root.CFrame = CFrame.new(snap.Position)
+		end
+		humanoid.Health = math.min(humanoid.MaxHealth, math.max(1, snap.Health))
+	elseif powerId == "meteor_shower" then
+		-- 5 pastry meteors over the def duration, one per interval,
+		-- each landing at a random point within the def radius and
+		-- dealing 1/5 of the def damage to enemies within 3 studs.
+		local meteors = 5
+		local perMeteor = math.max(1, math.floor(damage / meteors + 0.5))
+		local interval = (duration > 0 and duration or 3) / meteors
+		local origin = root.Position
+		task.spawn(function()
+			for _ = 1, meteors do
+				local angle = math.random() * math.pi * 2
+				local dist = math.random() * (radius > 0 and radius or 10)
+				local impact = origin + Vector3.new(math.cos(angle) * dist, 0, math.sin(angle) * dist)
+				for _, target in ipairs(findDamageable(impact, 3, character)) do
+					pcall(function()
+						target.Humanoid:TakeDamage(perMeteor)
+					end)
+					local away = target.Root.Position - impact
+					away = Vector3.new(away.X, 0, away.Z)
+					if away.Magnitude < 0.01 then
+						away = Vector3.new(0, 0, 1)
+					end
+					applyVelocity(target.Root, away.Unit * 25 + Vector3.new(0, 6, 0), 0.2)
+				end
+				fireAll(_names.SpawnEffect, {
+					type = "Power",
+					powerId = powerId,
+					player = player.Name,
+					position = impact,
+				})
+				task.wait(interval)
+			end
+		end)
+	elseif powerId == "void_dash" then
+		-- Blink forward up to the def range, briefly untouchable
+		-- (transparency 0.7 for the duration), slicing enemies within
+		-- the def radius of the path.
+		local dir = root.CFrame.LookVector
+		dir = Vector3.new(dir.X, 0, dir.Z)
+		if dir.Magnitude < 0.01 then
+			dir = Vector3.new(0, 0, 1)
+		end
+		local mid = root.Position + dir.Unit * (range * 0.5)
+		for _, target in ipairs(findDamageable(mid, radius > 0 and radius or 3, character)) do
+			if damage > 0 then
+				pcall(function()
+					target.Humanoid:TakeDamage(damage)
+				end)
+			end
+		end
+		local dest = root.Position + dir.Unit * range
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.FilterDescendantsInstances = { character }
+		local hit = workspace:Raycast(dest + Vector3.new(0, 4, 0), Vector3.new(0, -14, 0), params)
+		if hit then
+			root.CFrame = CFrame.new(dest.X, hit.Position.Y + 3, dest.Z)
+		else
+			return false
+		end
+		local originals: { [BasePart]: number } = {}
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+				originals[part] = part.Transparency
+				part.Transparency = 0.7
+			end
+		end
+		task.delay(duration > 0 and duration or 0.5, function()
+			for part, transparency in pairs(originals) do
+				if part.Parent then
+					part.Transparency = transparency
+				end
+			end
+		end)
+	elseif powerId == "gravity_crush" then
+		-- Crush everything in the def radius: def damage, dragged
+		-- toward the player, rooted (WalkSpeed 0) for the def duration.
+		for _, target in ipairs(findDamageable(root.Position, radius > 0 and radius or 7, character)) do
+			if damage > 0 then
+				pcall(function()
+					target.Humanoid:TakeDamage(damage)
+				end)
+			end
+			local toward = root.Position - target.Root.Position
+			toward = Vector3.new(toward.X, 0, toward.Z)
+			if toward.Magnitude > 0.01 then
+				applyVelocity(target.Root, toward.Unit * 30, 0.3)
+			end
+			local targetHumanoid = target.Humanoid
+			local oldSpeed = targetHumanoid.WalkSpeed
+			targetHumanoid.WalkSpeed = 0
+			task.delay(duration > 0 and duration or 2, function()
+				if targetHumanoid.Parent then
+					targetHumanoid.WalkSpeed = oldSpeed
+				end
+			end)
+		end
+	elseif powerId == "dimensional_prison" then
+		-- Cage the NEAREST enemy within the def range for the def
+		-- duration: no movement, no jump, inside a neon cage that
+		-- vanishes when the prison ends. Small def damage on capture.
+		local best: any = nil
+		local bestDist = (range > 0 and range or 12) + 1
+		for _, target in ipairs(findDamageable(root.Position, range > 0 and range or 12, character)) do
+			local d = (target.Root.Position - root.Position).Magnitude
+			if d < bestDist then
+				best = target
+				bestDist = d
+			end
+		end
+		if best == nil then
+			return false
+		end
+		if damage > 0 then
+			pcall(function()
+				best.Humanoid:TakeDamage(damage)
+			end)
+		end
+		local targetHumanoid = best.Humanoid
+		local oldSpeed = targetHumanoid.WalkSpeed
+		local oldJump = targetHumanoid.JumpPower
+		targetHumanoid.WalkSpeed = 0
+		targetHumanoid.JumpPower = 0
+		local cage = Instance.new("Model")
+		cage.Name = "DimensionalPrison"
+		local cageParts: { BasePart } = {}
+		for i = 1, 4 do
+			local angle = (i - 1) * math.pi / 2
+			local wall = Instance.new("Part")
+			wall.Name = "PrisonWall"
+			wall.Size = Vector3.new(0.3, 5, 3)
+			wall.Color = Color3.fromRGB(80, 200, 255)
+			wall.Material = Enum.Material.Neon
+			wall.Transparency = 0.4
+			wall.Anchored = true
+			wall.CanCollide = false
+			wall.CFrame = CFrame.new(best.Root.Position + Vector3.new(math.cos(angle) * 1.6, 2.5, math.sin(angle) * 1.6)) * CFrame.Angles(0, -angle, 0)
+			wall.Parent = cage
+			table.insert(cageParts, wall)
+		end
+		cage.Parent = workspace
+		Debris:AddItem(cage, duration > 0 and duration or 5)
+		task.delay(duration > 0 and duration or 5, function()
+			if targetHumanoid.Parent then
+				targetHumanoid.WalkSpeed = oldSpeed
+				targetHumanoid.JumpPower = oldJump
+			end
+		end)
 	elseif powerId == "time_distortion" then
 		-- Slow nearby enemies to 50% WalkSpeed for the def duration,
 		-- within the def radius. v1.0.0 used a hardcoded 12 studs / 5s.
@@ -559,7 +822,7 @@ function AbilityService.UsePower(player: Player, powerId: any): (boolean, string
 	local now = os.clock()
 	_cooldowns[player] = _cooldowns[player] or {}
 	local lastUsed = _cooldowns[player][clean] or 0
-	local cooldown = getCooldownSeconds(clean)
+	local cooldown = getEffectiveCooldown(player, clean)
 	if now - lastUsed < cooldown then
 		return false, "on cooldown"
 	end
@@ -568,6 +831,7 @@ function AbilityService.UsePower(player: Player, powerId: any): (boolean, string
 		return false, "effect failed"
 	end
 	_cooldowns[player][clean] = now
+	awardMasteryXP(player, clean)
 	-- FX for all clients, plus the cooldown state to the using player
 	-- on PowerUpdate (the client AbilityController listens for it and
 	-- corrects its local cooldown display from this).
@@ -578,6 +842,28 @@ function AbilityService.UsePower(player: Player, powerId: any): (boolean, string
 		player = player.Name,
 		position = root and root.Position or Vector3.new(0, 0, 0),
 	})
+	-- v1.1 visual pass: a positional ring + flash in the power's colour
+	-- (the positional form EffectsController handles), sized by the
+	-- power's radius. Damage powers get the full ring+flash; utility
+	-- powers get a smaller ring + poof.
+	local def = getPlayableDef(clean)
+	if root ~= nil and def ~= nil then
+		local color = def.Color or Color3.fromRGB(120, 200, 255)
+		local radius = tonumber(def.Radius) or 0
+		local damage = tonumber(def.Damage) or 0
+		local spawnRemote = getRemote("SpawnEffect")
+		if spawnRemote ~= nil then
+			local ringRadius = radius > 0 and radius or 5
+			pcall(function()
+				(spawnRemote :: RemoteEvent):FireAllClients("ring", root.Position, { radius = ringRadius, color = color })
+				if damage > 0 then
+					(spawnRemote :: RemoteEvent):FireAllClients("flash", root.Position, color)
+				else
+					(spawnRemote :: RemoteEvent):FireAllClients("poof", root.Position, nil)
+				end
+			end)
+		end
+	end
 	fireClient(_names.PowerUpdate, player, {
 		PowerId = clean,
 		Cooldown = cooldown,
@@ -702,6 +988,71 @@ function AbilityService.PushLoadout(player: Player)
 	})
 end
 
+-- GetMasteryXP(player, powerId): mastery XP the player has earned
+-- for one power (0 when unknown). GetMasteryLevel(player, powerId)
+-- returns the 0-5 level from Powers.GetMasteryLevel.
+function AbilityService.GetMasteryXP(player: Player, powerId: string): number
+	local clean = sanitize(powerId)
+	if not clean then
+		return 0
+	end
+	return getMasteryXP(player, clean)
+end
+
+function AbilityService.GetMasteryLevel(player: Player, powerId: string): number
+	local clean = sanitize(powerId)
+	if not clean then
+		return 0
+	end
+	return getMasteryLevel(player, clean)
+end
+
+-- GetMasteryStateForSave(player) / LoadMasteryState(player, data):
+-- mastery persistence. The XP table is mirrored into
+-- data.PowerMastery on every use, so a normal DataService save
+-- already persists it; these two functions are the explicit
+-- snapshot/restore pair for the audit trail and for services that
+-- want to carry mastery across a data reload.
+function AbilityService.GetMasteryStateForSave(player: Player): { [string]: number }
+	local copy: { [string]: number } = {}
+	local perPlayer = _masteryXP[player]
+	if perPlayer ~= nil then
+		for id, xp in pairs(perPlayer) do
+			copy[id] = xp
+		end
+	else
+		local data = getData(player)
+		if data ~= nil and type(data.PowerMastery) == "table" then
+			for id, xp in pairs(data.PowerMastery) do
+				if type(id) == "string" and type(xp) == "number" then
+					copy[id] = xp
+				end
+			end
+		end
+	end
+	return copy
+end
+
+function AbilityService.LoadMasteryState(player: Player, data: any): boolean
+	if not player or not player:IsA("Player") then
+		return false
+	end
+	if type(data) ~= "table" then
+		return false
+	end
+	local source = data.PowerMastery or data
+	if type(source) ~= "table" then
+		return false
+	end
+	_masteryXP[player] = _masteryXP[player] or {}
+	for id, xp in pairs(source) do
+		if type(id) == "string" and type(xp) == "number" and getPlayableDef(id) ~= nil then
+			_masteryXP[player][id] = math.max(0, math.floor(xp))
+		end
+	end
+	return true
+end
+
 -- SetTideService(tideService): setter injection (GameManager's
 -- tryWire does not call this today; call it from the parent when the
 -- TideService is available so tide_surfer grants real immunity there).
@@ -727,7 +1078,7 @@ function AbilityService.GetCooldownRemaining(player: Player, powerId: string): n
 		return 0
 	end
 	local lastUsed = perPlayer[clean] or 0
-	return math.max(0, getCooldownSeconds(clean) - (os.clock() - lastUsed))
+	return math.max(0, getEffectiveCooldown(player, clean) - (os.clock() - lastUsed))
 end
 
 local function onUseAbility(player: Player, powerId: any)
@@ -770,6 +1121,30 @@ function AbilityService.Init(dataService: any, tideService: any?)
 		_cooldowns[player] = nil
 		_lastUse[player] = nil
 		_surfers[player] = nil
+		_masteryXP[player] = nil
+		_snapshots[player] = nil
+	end)
+
+	-- Time Rewind snapshot loop (v1.1): every 0.5s, record each live
+	-- player's root position + health. Ring buffer of 7 entries, so
+	-- the oldest snapshot is ~3s old — exactly what time_rewind
+	-- restores. Cheap (one table insert per player per 0.5s) and
+	-- stops recording dead / absent characters.
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			for _, player in ipairs(Players:GetPlayers()) do
+				local humanoid = getHumanoid(player)
+				local root = getRoot(player)
+				if humanoid ~= nil and humanoid.Health > 0 and root ~= nil then
+					_snapshots[player] = _snapshots[player] or {}
+					table.insert(_snapshots[player], { Position = root.Position, Health = humanoid.Health })
+					while #_snapshots[player] > 7 do
+						table.remove(_snapshots[player], 1)
+					end
+				end
+			end
+		end
 	end)
 
 	task.spawn(function()

@@ -8,7 +8,7 @@ local Config = {}
 
 Config.GameName = "Glitch Tide — Brainrot Heist: The Memeverse"
 Config.GameShortName = "Glitch Tide"
-Config.GameVersion = "1.0.2"
+Config.GameVersion = "1.1.0"
 
 -- Round / match flow (seconds)
 Config.RoundDuration = 180
@@ -174,6 +174,12 @@ Config.GlitchTideWarningSeconds = 30
 Config.GlitchTideDurationSeconds = 60
 Config.GlitchTideIncomeMultiplier = 2
 Config.GlitchTideGlitchChance = 0.35
+-- v1.1 tide tuning: seconds of the final Active-phase surge (Stage 9,
+-- "climax") and the roll chance for a secret tide encounter (Stage 10
+-- hook — see TideService.GetSecretEncounter).
+Config.TideClimaxSeconds = 5
+Config.TideSecretEncounterChance = 0.10
+Config.TideShelterCount = 3
 
 -- Upgrade costs, indexed by current level (level 1 -> cost to reach 2, ...).
 -- Each table is a flat list; the last entry repeats for higher levels.
@@ -233,37 +239,51 @@ Config.RarityWeights = {
 
 -- Glitch Tide variations: each tide rolls one variation that scales
 -- NPC speed, rewards and damage for the whole event window.
--- ONLY these five are playable (TideService rolls from this table).
+-- ALL TEN are playable in v1.1 (TideService implements real behaviour
+-- for each: wave profile, lighting mood, hazard, rewards — see
+-- TideService.luau and docs/QA_V11_D.md). Double / Dark / GiantBoss
+-- were data-only in v1.0.1 (Config.TideVariationsDisabled) and are
+-- promoted here with real behaviour; Corrupted and Cosmic are new.
 -- Weight = relative roll weight. SpeedMultiplier scales the wave sweep
 -- and NPC speed; RewardMultiplier scales survivor rewards;
--- Damage scales wave + Toxic damage.
+-- Damage scales wave + Toxic damage. ChaosShards = event-material
+-- payout to each survivor. Announcement = the warning text broadcast
+-- when this variation rolls.
 Config.TideVariations = {
 	Standard = {
-		Weight = 40,
+		Weight = 30,
 		SpeedMultiplier = 1.0,
 		RewardMultiplier = 1.0,
 		Damage = 1.0,
+		ChaosShards = 1,
+		Announcement = "GLITCH TIDE INCOMING — get to a shelter, a platform, or your base!",
 		Description = "A normal Glitch Tide: glitched Brainrots flood the conveyor and income doubles.",
 	},
 	Fast = {
-		Weight = 20,
+		Weight = 15,
 		SpeedMultiplier = 1.5,
 		RewardMultiplier = 1.25,
 		Damage = 1.0,
+		ChaosShards = 1,
+		Announcement = "FAST TIDE — the wave is sweeping the channel half as fast again. Run!",
 		Description = "Everything moves half as fast again — conveyor, NPCs and thieves alike.",
 	},
 	Toxic = {
-		Weight = 15,
+		Weight = 12,
 		SpeedMultiplier = 1.0,
 		RewardMultiplier = 1.5,
 		Damage = 1.25,
+		ChaosShards = 2,
+		Announcement = "TOXIC TIDE — the air itself hurts. Stay out of the green pools and the channel!",
 		Description = "Toxic tide: the air itself hurts, but the loot is richer.",
 	},
 	Frozen = {
-		Weight = 15,
+		Weight = 12,
 		SpeedMultiplier = 0.7,
 		RewardMultiplier = 1.5,
 		Damage = 1.0,
+		ChaosShards = 2,
+		Announcement = "FROZEN TIDE — everything slows to a crawl. The ice fields will freeze you in place!",
 		Description = "Frozen tide: everything slows to a crawl while rewards stay fat.",
 	},
 	Meteor = {
@@ -271,35 +291,54 @@ Config.TideVariations = {
 		SpeedMultiplier = 1.0,
 		RewardMultiplier = 1.75,
 		Damage = 1.5,
+		ChaosShards = 3,
+		Announcement = "METEOR TIDE — pastry meteors are raining down! Dodge them and grab the fallout!",
 		Description = "Meteor tide: pastry meteors rain down — dodge them and collect the fallout.",
 	},
-}
-
--- Demoted tide variations (v1.0.1 QA): Double, Dark and GiantBoss were
--- listed here in v1.0.0 but TideService had NO behaviour for any of
--- them (no lighting change, no spawn, no damage model) and ForceStart
--- rejected them as unknown. They are NOT in the playable rotation and
--- must not be offered in any UI. Kept here only as a record so a future
--- implementation can promote one by moving it into TideVariations with
--- real behaviour in TideService.
-Config.TideVariationsDisabled = {
 	Double = {
-		SpeedMultiplier = 1.0,
+		Weight = 8,
+		SpeedMultiplier = 1.25,
 		RewardMultiplier = 2.0,
 		Damage = 1.0,
-		Description = "DEMOTED (no behaviour): double rewards. Not playable.",
+		ChaosShards = 4,
+		Announcement = "DOUBLE TIDE — TWO wave walls are coming down the channel at once. Double trouble, double rewards!",
+		Description = "v1.1 PROMOTED: two wave walls sweep the channel in anti-phase; double survivor rewards.",
 	},
 	Dark = {
+		Weight = 6,
 		SpeedMultiplier = 1.25,
 		RewardMultiplier = 1.75,
 		Damage = 1.25,
-		Description = "DEMOTED (no behaviour): visibility drops. Not playable.",
+		ChaosShards = 3,
+		Announcement = "DARK TIDE — the lights are dying. Something is moving in the dark. Stay in the light!",
+		Description = "v1.1 PROMOTED: visibility collapses and ambush Brainrots spawn in the dark.",
 	},
 	GiantBoss = {
+		Weight = 4,
 		SpeedMultiplier = 0.8,
 		RewardMultiplier = 3.0,
 		Damage = 2.0,
-		Description = "DEMOTED (no behaviour): a giant boss storms the arena. Bosses spawn via BossService instead. Not playable.",
+		ChaosShards = 5,
+		Announcement = "GIANT BOSS TIDE — THE GLITCH COLOSSUS is storming the arena mid-tide! Triple rewards for survivors!",
+		Description = "v1.1 PROMOTED: THE GLITCH COLOSSUS spawns mid-tide via BossService; the wave hits twice as hard.",
+	},
+	Corrupted = {
+		Weight = 2,
+		SpeedMultiplier = 1.1,
+		RewardMultiplier = 2.25,
+		Damage = 1.5,
+		ChaosShards = 4,
+		Announcement = "CORRUPTED TIDE — glitch barriers are tearing the world apart. Touch one and you will be thrown somewhere else!",
+		Description = "v1.1 NEW: glitch barriers teleport anyone who touches them; random teleports strike the exposed.",
+	},
+	Cosmic = {
+		Weight = 1,
+		SpeedMultiplier = 0.9,
+		RewardMultiplier = 2.5,
+		Damage = 1.25,
+		ChaosShards = 5,
+		Announcement = "COSMIC TIDE — gravity is failing and the stars are falling! Catch the starfall for Chaos Shards!",
+		Description = "v1.1 NEW: low gravity for the whole tide; collectible starfall rains down.",
 	},
 }
 
