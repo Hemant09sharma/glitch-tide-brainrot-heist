@@ -3,7 +3,7 @@
 **For:** Grok Build (Studio integration, competition packaging, publishing,
 and make.fun submission).
 **From:** Muse (game code + documentation only).
-**Version:** v1.0.2 — 2026-11-18 (packaging correction on top of v1.0.1; no gameplay changes).
+**Version:** v1.1.0 — 2026-11-19 (EXTREME EXPANSION on top of v1.0.2; see `README.md` and `QA_TEST_REPORT.md` §9–§13).
 
 **Read first:** run the camera regression test in §1 *before* anything
 else. It is the highest-risk item in this delivery: the camera fix is
@@ -22,6 +22,9 @@ The v1.0.1 camera fix is the highest-risk change in this delivery: it was
 verified statically only (grep + `luau-compile` + code review), never in a
 running Studio session. Run this test **before** the acceptance scenario
 (§4). Any failure here is a blocker — do not publish, do not proceed.
+This test must be re-run after the v1.1 overhaul: `MapBuilder`,
+`LightingService`, and `CharacterModels` all changed since v1.0.2, so a
+pass on v1.0.2 does not cover v1.1.
 
 **Root cause it fixes:** the default Roblox camera only (re)binds its
 subject when the engine spawns a character (`CharacterAdded`).
@@ -61,32 +64,32 @@ should have rebound it; report the exact Output lines.
 - A Rojo 7.7 project: `default.project.json` + `rojo.toml` + `src/`
   (shared / server / client / map). See `README.md` §10 for the
   service mapping.
-- **A prebuilt place file is included: `GlitchTide.rbxl`** (333,816 bytes,
+- **A prebuilt place file is included: `GlitchTide.rbxl`** (558,606 bytes,
   built in this workspace with Rojo 7.7.1 and verified — decompressed — to
-  contain all 48 script sources). Open it directly in Studio to skip
+  contain all 68 script sources byte-for-byte). Open it directly in Studio to skip
   step 4, or rebuild it yourself to confirm the build (step 4).
-- Documentation: `README.md`, `QA_TEST_REPORT.md` (v1.0.2 test report),
+- Documentation: `README.md`, `QA_TEST_REPORT.md` (v1.1.0 test report; §§1–8 are historical v1.0.2 evidence),
   `FEATURE_CHECKLIST.md`, `THIRD_PARTY_NOTICES.md`, `CHANGELOG.md`,
   `TEST_REPORT.md` (archived v1.0.0 report — historical only),
   `docs/map.md` (world note, outside the Rojo tree),
   `LICENSE` (MIT, "Glitch Tide Contributors", 2026).
 - No screenshots, recordings, or published place exist yet.
 
-**Tree completeness (v1.0.2, verified):** all 48 Luau files are present,
+**Tree completeness (v1.1.0, verified):** all 68 Luau files are present,
 every module `Main.server.luau` requires resolves, `luau-compile` passes
-48/48, and `rojo build` succeeds — see `QA_TEST_REPORT.md`. The old
+68/68, and `rojo build` succeeds — see `QA_TEST_REPORT.md` §11–§13. The old
 2026-11-18 warning about missing `MapBuilder` / `GameManager` no longer
 applies.
 
-**Packaging check (v1.0.2, do this in Studio after opening the place or
+**Packaging check (v1.1.0, do this in Studio after opening the place or
 syncing):** in the Explorer, confirm `StarterGui` (a real service, direct
 child of the DataModel) contains `MainMenu`; `StarterPlayer →
 StarterPlayerScripts` contains exactly `Main` (LocalScript) and
-`Controllers/` (14 controllers); and `Workspace` is empty (the arena is
+`Controllers/` (20 controllers); and `Workspace` is empty (the arena is
 built at runtime by `MapBuilder`). If `MainMenu` is missing from
 `StarterGui`, or a `ui` folder appears under `StarterPlayerScripts`,
 you are looking at the old v1.0.1 project file — stop and use the
-v1.0.2 `default.project.json`.
+v1.1.0 `default.project.json`.
 
 **Project-file note:** `default.project.json` uses `$className` (not
 `$class`) for the DataModel root — Rojo 7.7 rejects `$class` with
@@ -200,7 +203,7 @@ must stay free of errors throughout.
 | 8 | Upgrade | A base upgrade is bought (slot, income multiplier, lock, or turret); cost deducted and effect visible |
 | 9 | Ability | Q (primary), F (Slam), R (Heal) each fire; E is Interact (not an ability) and G drops a carried Brainrot; confirm the final keybinds match `README.md` §8 and correct the docs if they differ |
 | 10 | Mutation | A Glitched Brainrot is bought/placed; its 1.5× price and bonus income apply |
-| 11 | Quest | Complete a quest objective (`QuestService`, 16 quests) and claim its reward; confirm the Quests panel (J) loads the live list via `RequestQuests` on open, not only after progress changes |
+| 11 | Quest | Complete a quest objective (`QuestService`, 54 quests) and claim its reward; confirm the Quests panel (J) loads the live list via `RequestQuests` on open, not only after progress changes |
 | 11b | Fusion | Buy two Brainrots, leave both unplaced, open the Shop → Fusion tab, select the recipe pair and press FUSE — the recipe result appears in the inventory and both inputs are consumed (cost: 1,000 coins + 25 Mutation Crystals) |
 | 11c | Golden Hour | Force or wait for a Golden Hour event; confirm the HUD event banner announces it and base income doubles (stacks with the Tide 2×) |
 | 12 | Save / rejoin | Stop the test, restart, and confirm coins, Brainrots, and upgrades persisted (requires Step 5's API-access setting) |
@@ -229,7 +232,7 @@ missing, record it as a gap and fix the code — do not mark it passed.
 | Conveyor not spawning Brainrots | `GameManager` / economy loop not started, or conveyor config wrong | Confirm `GameManager.Start()` runs (Output print from `Main.server.luau`); check `Config.ConveyorSpawnInterval` (8 s) and `Config.ConveyorMaxItems` (8); look for errors from the economy/conveyor loop in Output |
 | Abilities do nothing | Wrong keybinds, or client controller not wired | Confirm the bindings in `Config.luau` (`AbilitySlots` / `GenericAbilities`) and `Powers.luau`; check `Main.client.luau` wires the controllers; correct `README.md` §8 if the binding differs |
 | "Not a valid member" require error at startup | A module `Main.server.luau` requires is missing from `Services/` | Confirm `MapBuilder`, `GameManager`, `DataService`, and `EconomyService` all exist under `src/server/Services/`; restore the missing module before building |
-| Map is empty / no bases, conveyor, or lobby | `MapBuilder.Build()` failed or was not called | Check Output for the MapBuilder print/error; the map is built at runtime, not stored as parts — `src/map` intentionally contains only a README |
+| Map is empty / no bases, conveyor, or lobby | `MapBuilder.Build()` failed or was not called | Check Output for the MapBuilder print/error; the map is built at runtime, not stored as parts — `src/map` intentionally contains only a `.gitkeep` |
 
 ---
 

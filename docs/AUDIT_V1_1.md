@@ -1,5 +1,16 @@
 # AUDIT — GLITCH TIDE v1.1 (read-only, Part 1)
 
+> **STATUS — SUPERSEDED BASELINE AUDIT. READ FIRST.** This document is the
+> ORIGINAL PRE-EXPANSION BASELINE audit of the v1.0.2 code (48 Luau files,
+> 26,061 lines, 18 Brainrots), written before any v1.1 work began. It does
+> NOT describe the current v1.1 release. It is explicitly SUPERSEDED by the
+> completed v1.1 workstreams: see `QA_TEST_REPORT.md` §9–§13 and the
+> workstream QA docs `docs/QA_V11_A.md`–`docs/QA_V11_E.md`. The body below
+> is preserved verbatim as the baseline record — its counts (48 scripts,
+> 18 Brainrots, 16 quests, 12 powers, 7 zones) are v1.0.2 facts, not v1.1.
+> The current release is v1.1.0: 68 Luau files, 42,045 lines, 27 Brainrots,
+> 54 quests, 17 playable powers, 9 regions.
+
 **Audited tree:** `~/workspace/your_files/glitch-tide-v1.1/` — 48 Luau files, 26,061 lines.
 **Date:** 2026-11-19. **Method:** read every `.luau` under `src/` (shared, server, client),
 `default.project.json`, `rojo.toml`, and `QA_TEST_REPORT.md` (§1–§11). No game code was

@@ -1,16 +1,28 @@
 # QA Test Report — GLITCH TIDE: BRAINROT HEIST: THE MEMEVERSE
 
-**Version:** 1.0.2 — 2026-11-18 (v1.0.1 final integration pass, plus the
-v1.0.2 packaging correction in §8 — no gameplay changes).
-**Scope:** everything in `~/workspace/your_files/brainrot-battle-arena/`
-(48 Luau files, 26,061 lines) after four fix workers (camera, core loop,
-powers/mutations/tide, UI/security) plus the 7 integration fixes below.
+**Version:** 1.1.0 — 2026-11-19 (EXTREME EXPANSION on v1.0.2; current release).
+**Scope:** everything in `~/workspace/your_files/glitch-tide-v1.1/`
+(68 Luau files, 42,045 lines) after the v1.1 expansion workstreams
+(audit, visual overhaul, 9 new Brainrots, 2 new regions, 10 working tide
+variants, Laboratory / Expeditions / Territory / Companions / Secrets,
+deeper progression, 54 quests, 2 new bosses, 5 new powers, UI redesign,
+sound, multiplayer hardening).
+**Current-release status:** §§9–13 are the current v1.1.0 record
+(audit summary, integration, v1.1 tests T12–T20, v1.1 bug list B1–B17,
+delivery counts + paid-eligibility statement).
+**§§1–8 below are HISTORICAL v1.0.2 evidence** — preserved verbatim as
+history (the v1.0.1 final integration pass and the v1.0.2 packaging
+correction). Do not read their counts (48 files, 26,062 lines,
+18 Brainrots, 16 quests, 12 powers, 21 services, 14 controllers) as the
+current release; the current counts are 68 files, 42,045 lines,
+27 Brainrots, 54 quests, 17 playable powers, 30 services,
+20 controllers — see §13.
 **Honesty rule for this report:** a test is listed as passed only if a
 tool in this workspace actually ran it and returned the result. Nothing
 here claims a Studio playtest, a screenshot, a recording, or a live
 DataStore round-trip — none of those happened in this workspace.
 
-## 1. Camera — root cause and fix
+## 1. Camera — root cause and fix (HISTORICAL — v1.0.2 evidence)
 
 ### Root cause
 The default Roblox camera only (re)binds its subject when the engine
@@ -56,7 +68,7 @@ replicated, leaving the client briefly pointing at a destroyed Humanoid.
   switch → teleport blink → death/respawn → 60 s idle. Until it passes,
   the camera fix is code-reviewed, not proven.
 
-## 2. Fixed-bug list (grouped by area)
+## 2. Fixed-bug list (grouped by area) (HISTORICAL — v1.0.2 evidence)
 
 File:line citations are to the fixed code (or the comment documenting the
 fix) as it stands in v1.0.1. "Prior worker" items are the fixes the four
@@ -115,7 +127,7 @@ the harnesses in §4, not re-implemented.
 | I6 | `BuyCharacter` / `SelectCharacter` had no burst limit | `EconomyService.luau:130`, `CharacterService.luau:377` | `SecurityService.BurstLimit` existed but nothing called it (U2) | `BurstLimit(player, key, 5, 5)` at the top of both handlers; bursts rejected with a clear warn + (SelectCharacter) a `CharacterSwitchFailed` "too many requests" reply. Purchase/equip logic untouched; the existing 0.25 s buy debounce is kept |
 | I7 | `InteractType` / `InteractId` attribute scan found nothing | `InteractionController.luau:178-185` (stub), header comment | No producer ever set those attributes (`MapBuilder`, `ConveyorService`, `NPCService` never tag parts); the scan walked descendants 4×/s and always returned nil | Option (b): scan removed, `findNearest` is now an intentionally inert stub returning nil; ProximityPrompts documented as the sole interaction path. Behaviour-preserving — E with nothing nearby already showed only the "nothing nearby" hint |
 
-## 3. Tests actually executed (tool + result)
+## 3. Tests actually executed (tool + result) (HISTORICAL — v1.0.2 evidence)
 
 All run 2026-11-18 in this workspace, after the 7 integration fixes.
 
@@ -136,7 +148,7 @@ command line, T3's `$class` project-file defect which was itself a real
 bug and was fixed as L9, T4/T5 harness field-name bugs), all resolved
 and re-run green. See the per-test notes above.
 
-## 4. Partially implemented features
+## 4. Partially implemented features (HISTORICAL — v1.0.2 evidence)
 
 These exist in code but with a known gap. None is new in v1.0.1; all are
 carried forward from v1.0.0 and recorded here so they are not mistaken
@@ -156,7 +168,7 @@ for complete features.
 | Secret Merchant event | Flag works; no NPC model while `NPCService` is absent (see `EventService` header) |
 | Fusion tab inventory | Shows unplaced instances only; a player whose Brainrots are all placed sees the recipes but nothing to fuse (by design — the server rejects placed inputs) |
 
-## 5. Not implemented (intentional)
+## 5. Not implemented (intentional) (HISTORICAL — v1.0.2 evidence)
 - **Trading** — intentionally omitted for safety. `TradeRequest` /
   `TradeAccept` / `TradeCancel` exist as reserved names only; no handler
   moves items or currency between players.
@@ -165,7 +177,7 @@ for complete features.
 - **Tide variations Double / Dark / GiantBoss** — data-only in
   `Config.TideVariationsDisabled`; no behaviour, never roll.
 
-## 6. Tests NOT executed (no Studio / live services in this workspace)
+## 6. Tests NOT executed (no Studio / live services in this workspace) (HISTORICAL — v1.0.2 evidence)
 
 The following were **not** run and must **not** be reported as passed.
 Grok Build must run them in Roblox Studio.
@@ -204,7 +216,7 @@ Known Studio-only risks to check first:
   future keybind change must update `Config.Keybinds`,
   `Config.AbilitySlots`, and `Utils.GetKeybinds` together.
 
-## 7. Delivery counts (v1.0.1)
+## 7. Delivery counts (v1.0.1) (HISTORICAL — v1.0.2 evidence)
 
 - 48 Luau files, 26,062 lines (was 25,625 lines at the start of this
   pass; +437 lines, almost all the Fusion tab, the HUD listeners, the
@@ -223,7 +235,7 @@ Known Studio-only risks to check first:
   superseded by this ZIP.
 
 
-## 8. v1.0.2 packaging correction — what changed and how it was verified
+## 8. v1.0.2 packaging correction — what changed and how it was verified (HISTORICAL — v1.0.2 evidence)
 
 Packaging only. No gameplay code changed except `Config.GameVersion`
 1.0.1 → 1.0.2 and one stale comment in `MainMenu.luau` (see below).

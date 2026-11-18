@@ -315,14 +315,14 @@ so `src/client/ui` is no longer duplicated under `StarterPlayerScripts`):
 
 | Disk path | Roblox service | Contents |
 |---|---|---|
-| `src/shared` | `ReplicatedStorage` | Shared modules both sides require: `Config`, `Characters`, `CharacterModels`, `Economy`, `Mutations`, `Powers`, `Remotes`, `Synergies`, `Types`, `Utils` |
-| `src/server` | `ServerScriptService` | `Main.server.luau` entry point + `Services/` (21 services: data, economy, character, combat, map, game loop, tide, quests, events, fusion, progression, raids, bosses, waves, NPCs, security, …) |
+| `src/shared` | `ReplicatedStorage` | 15 shared modules both sides require: `AchievementDefs`, `CharacterModels`, `Characters`, `Companions`, `Config`, `Dimensions`, `Economy`, `ExpeditionDefs`, `LabDefs`, `Mutations`, `Powers`, `Remotes`, `Synergies`, `Types`, `Utils` |
+| `src/server` | `ServerScriptService` | `Main.server.luau` entry point + `Services/` (30 services: data, economy, character, combat, map, game loop, tide, quests, events, fusion, progression, raids, bosses, waves, NPCs, security, lighting, environment, dimensions, laboratory, expedition, territory, companion, secret, achievements, …) |
 | `src/client/Main.client.luau` | `StarterPlayerScripts` (as `Main`, a LocalScript) | Client entry point; loads `Controllers/` in order |
-| `src/client/Controllers` | `StarterPlayerScripts` → `Controllers/` | 14 controllers: animation, camera, effects, HUD, interaction, market, shop, quests, collection, … |
+| `src/client/Controllers` | `StarterPlayerScripts` → `Controllers/` | 20 controllers: animation, camera, effects, HUD, interaction, market, shop, quests, collection, achievement, dimension, expedition, laboratory, territory, sound, … |
 | `src/client/ui` | `StarterGui` (direct child of DataModel) | `MainMenu.luau` (ModuleScript, cloned into PlayerGui on spawn) |
 | `src/map` | `Workspace` | Intentionally empty — the map is built at runtime by `MapBuilder` (see `docs/map.md`); do not put `.rbxl` / `.rbxm` files here. No documentation file lives under `src/`, so nothing non-code enters the Roblox instance tree. |
 
-48 Luau files, 26,062 lines in total. Every module `Main.server.luau`
+68 Luau files, 42,045 lines in total. Every module `Main.server.luau`
 requires resolves; the Rojo build was verified in this workspace
 (`rojo build -o GlitchTide.rbxl`, Rojo 7.7.1).
 
@@ -435,7 +435,25 @@ breaks those requires.
 
 ## 14. Testing
 
-### What was verified in this workspace (v1.0.2, no Studio)
+### What was verified in this workspace (v1.1.0, no Studio)
+
+- `luau-compile` on every `.luau` file: **68/68 pass**.
+- Rojo build, run twice: byte-identical `GlitchTide.rbxl` (558,606 bytes,
+  SHA-256 `40f0cf4fd5bdf630687ebd4d3f0f9ae5ef849894697ebc3d6e4d27933d1b3af0`),
+  verified to contain all 68 script sources byte-for-byte
+  (`scripts/verify-rbxl.py` 68/68) and checked against Rojo's own
+  `/show-instances` tree (77 instances; `StarterGui → MainMenu` exactly
+  once; `StarterPlayerScripts → Main + Controllers/`; `Workspace` empty).
+- Python static harness (70 checks, all pass) and Lune pure-logic harness
+  (40 checks, all pass) — see `QA_TEST_REPORT.md` §11 (tests T12–T20).
+  Full v1.1 verification record: `QA_TEST_REPORT.md` §9–§13.
+- **Not verified here (needs Studio):** any runtime behaviour — see below.
+
+### What was verified in this workspace (v1.0.2, no Studio) — HISTORICAL
+
+The bullets below are v1.0.2 evidence, preserved verbatim as history.
+Do not read their counts (48 files, 18 Brainrots, 16 quests, 12 powers)
+as the current release; the current release is v1.1.0 (see above).
 
 - `luau-compile` on every `.luau` file: **48/48 pass**.
 - `luau-analyze`: diagnostics are Roblox-definition noise only
@@ -567,6 +585,6 @@ the DataStore design pattern, and the steal-loop design only.
 - `CHANGELOG.md` — version history
 - `LICENSE` — MIT License
 - `default.project.json`, `rojo.toml` — Rojo project definition
-- `GlitchTide.rbxl` — prebuilt place file (Rojo 7.7.1, v1.0.2 packaging fix)
+- `GlitchTide.rbxl` — prebuilt place file (Rojo 7.7.1, v1.1.0 rebuild, 558,606 bytes)
 - `docs/map.md` — world/map note (excluded from the Rojo instance tree)
-- `src/` — all Luau code and the map placeholder (48 files, 26,062 lines)
+- `src/` — all Luau code and the map placeholder (68 files, 42,045 lines)

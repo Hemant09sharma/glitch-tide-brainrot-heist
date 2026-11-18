@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """GLITCH TIDE make.fun package validator (stdlib only, read-only).
 
-Checks the package in its own directory. Run from the package root:
+Validates the make.fun COMPETITION PACKAGE tree
+(glitch-tide-final-candidate/), NOT the development game tree. Run from
+the competition package root:
     python3 scripts/validate-package.py
 Exit 0 only if every check passes. The two EXPECTED failures of a
 not-yet-submittable package (no PLAY.json, <3 screenshots) are reported
 as PENDING, not PASS, so a green run never hides them.
+
+Tree guard (added in the v1.1 release cleanup): if the make.fun package
+markers (main.ts, vendor/makefun-roblox.ts) are absent at the tree root,
+this script prints a clear message and exits 2 without running any
+check, instead of failing misleadingly against a game tree. For the
+development game tree use scripts/harness-python.py,
+scripts/harness-lune/, and scripts/verify-rbxl.py instead.
 """
 import hashlib
 import json
@@ -30,6 +39,28 @@ def note(name, detail=""):
 
 def read(p):
     return (SRC / p).read_text(errors="replace")
+
+
+# --- Tree guard (v1.1 cleanup) -------------------------------------------
+# This validator is for the make.fun COMPETITION PACKAGE tree only. The
+# markers below exist only there; a development game tree (this repo)
+# has neither main.ts nor vendor/makefun-roblox.ts. Without this guard,
+# running the validator here fails checks that can never pass in a game
+# tree (48-file count, PLAY.json.template, vendor file) and produces a
+# misleading FAIL report. Stop early with an explanation instead.
+_MARKERS = (ROOT / "main.ts", ROOT / "vendor" / "makefun-roblox.ts")
+if not all(m.exists() for m in _MARKERS):
+    print("NOT A COMPETITION PACKAGE TREE — validator not run.")
+    print("  This script validates the make.fun competition package in")
+    print("  glitch-tide-final-candidate/ (it needs main.ts and")
+    print("  vendor/makefun-roblox.ts at the tree root).")
+    print(f"  You ran it in: {ROOT}")
+    print("  For this development game tree use instead:")
+    print("    python3 scripts/harness-python.py   (static checks)")
+    print("    bash scripts/harness-lune/refresh.sh && "
+          "lune run scripts/harness-lune/main.luau")
+    print("    python3 scripts/verify-rbxl.py       (src-to-place matching)")
+    sys.exit(2)
 
 
 # 1. Package shape

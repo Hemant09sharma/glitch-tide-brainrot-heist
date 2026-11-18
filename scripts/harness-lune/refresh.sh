@@ -6,7 +6,7 @@
 # require("./X")); the project files are never touched. Run before
 # `lune run scripts/harness-lune/main.luau` (and re-run after any
 # src/shared/ change — a stale copy fails loudly: main.luau asserts
-# GameVersion 1.0.2, so a version drift is caught, not hidden).
+# GameVersion 1.1.0, so a version drift is caught, not hidden).
 #
 # Usage (from the package root):
 #   bash scripts/harness-lune/refresh.sh
