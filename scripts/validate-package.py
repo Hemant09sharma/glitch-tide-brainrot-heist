@@ -65,7 +65,17 @@ if not all(m.exists() for m in _MARKERS):
 
 # 1. Package shape
 luau = sorted(SRC.rglob("*.luau"))
-check("src/ holds 48 Luau files", len(luau) == 48, f"found {len(luau)}")
+# Expected Luau count follows the packaged game's own version — never a
+# hardcoded stale number (v1.1 cleanup: this check used to assert 48
+# unconditionally, which is wrong for a v1.1-based package). The v1.0.2
+# competition package holds 48 files; a v1.1-based one holds 68.
+_cfg = (SRC / "shared" / "Config.luau").read_text(errors="replace")
+_ver = re.search(r'GameVersion\s*=\s*"([^"]+)"', _cfg)
+_EXPECTED_LUAU = {"1.0.2": 48, "1.1.0": 68}.get(_ver.group(1) if _ver else "")
+check(f"src/ holds the expected Luau files for GameVersion "
+      f"{_ver.group(1) if _ver else '?'}",
+      _EXPECTED_LUAU is not None and len(luau) == _EXPECTED_LUAU,
+      f"found {len(luau)}, expected {_EXPECTED_LUAU}")
 check("no .md files under src/ (docs stay out of the Rojo tree)",
       not list(SRC.rglob("*.md")))
 # One dot-name is allowed: src/map/.gitkeep keeps the empty Workspace
