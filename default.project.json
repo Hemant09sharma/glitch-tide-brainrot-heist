@@ -1,0 +1,28 @@
+{
+  "name": "GlitchTide",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$path": "src/shared"
+    },
+    "ServerScriptService": {
+      "$path": "src/server"
+    },
+    "StarterGui": {
+      "$path": "src/client/ui"
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Controllers": {
+          "$path": "src/client/Controllers"
+        },
+        "Main": {
+          "$path": "src/client/Main.client.luau"
+        }
+      }
+    },
+    "Workspace": {
+      "$path": "src/map"
+    }
+  }
+}

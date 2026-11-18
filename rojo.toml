@@ -1,0 +1,11 @@
+# Rojo configuration for Glitch Tide — Brainrot Heist: The Memeverse
+# Build with: rojo build -o GlitchTide.rbxl
+# Serve with: rojo serve
+
+[build]
+# Rojo writes the place file here when `rojo build` is run without -o.
+output = "GlitchTide.rbxl"
+
+[serve]
+port = 34872
+# Serve the project so the Roblox Studio plugin can sync live edits.
