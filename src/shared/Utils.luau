@@ -31,12 +31,11 @@ end
 -- rebalance in Config moves every label with it — no key is ever
 -- hardcoded in a UI file. Returns nil when Config has no binding.
 --
--- NOTE (QA 2026-11-18): Config currently binds slam to "E" and dash
--- and primary both to "Q", while the shipped AbilityController binds
--- Q = primary, F = slam, R = heal and reserves E for Interact. Until
--- Config is corrected to Q/F/R, labels derived here show Config's
--- stale "E" for slam. The labels are intentionally dynamic so the
--- one-line Config fix corrects every UI at once.
+-- NOTE (v1.0.1 QA, fixed): Config used to bind slam to "E" and dash
+-- and primary both to "Q". Since v1.0.1 Config is canonical Q/F/R
+-- (Q = primary, F = slam, R = heal, E = Interact), and the labels
+-- derived here read Config dynamically, so a rebalance in Config
+-- moves every label with it — no key is ever hardcoded in a UI file.
 function Utils.GetAbilityKey(abilityId: string): string?
 	local cfg = getConfig()
 	if cfg == nil or type(abilityId) ~= "string" then

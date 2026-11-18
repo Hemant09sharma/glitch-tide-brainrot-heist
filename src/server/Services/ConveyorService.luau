@@ -255,15 +255,52 @@ end
 
 local function pickRarity(): string
 	local weights = effectiveWeights()
+	-- v1.1 companion RareDetection: the strongest detection bonus among
+	-- players currently in-game boosts Epic+ weights on the SHARED
+	-- conveyor (the spawn roll has no buying player, so a per-player
+	-- roll is impossible — the server-wide best bonus applies instead).
+	-- Capped at +20%, matching CompanionService's cap.
+	local detectBonus = 0
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("CompanionService")
+		if not mod then
+			return
+		end
+		local svc = require(mod)
+		if type(svc.GetRareWeightMultiplier) ~= "function" then
+			return
+		end
+		for _, p in ipairs(Players:GetPlayers()) do
+			local ok, mult = pcall(svc.GetRareWeightMultiplier, p, "Epic")
+			if ok and type(mult) == "number" then
+				detectBonus = math.max(detectBonus, mult - 1)
+			end
+		end
+	end)
+	detectBonus = math.clamp(detectBonus, 0, 0.20)
+	-- Adjusted weights (the cached table is never mutated).
+	local adjusted: { [string]: number } = {}
+	for rarity, w in pairs(weights) do
+		local weight = tonumber(w) or 0
+		if detectBonus > 0 then
+			local rankOk, rank = pcall(function()
+				return Characters.GetRarityRank(rarity)
+			end)
+			if rankOk and type(rank) == "number" and rank >= 4 then
+				weight *= (1 + detectBonus)
+			end
+		end
+		adjusted[rarity] = weight
+	end
 	local total = 0
-	for _, w in pairs(weights) do
+	for _, w in pairs(adjusted) do
 		total += tonumber(w) or 0
 	end
 	if total <= 0 then
 		return "Common"
 	end
 	local roll = math.random() * total
-	for rarity, w in pairs(weights) do
+	for rarity, w in pairs(adjusted) do
 		roll -= tonumber(w) or 0
 		if roll <= 0 then
 			return rarity

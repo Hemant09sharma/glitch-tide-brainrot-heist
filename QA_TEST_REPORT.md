@@ -297,3 +297,228 @@ regression test (`GROK_BUILD_HANDOFF.md` §1) and the packaging check
 in `GROK_BUILD_HANDOFF.md` §2 (Explorer: `StarterGui → MainMenu`,
 `StarterPlayerScripts → Main + Controllers/`, `Workspace` empty)
 before playtesting.
+
+
+## 9. v1.1 audit (Part 1) — summary
+
+Full audit: `docs/AUDIT_V1_1.md` (989 lines, all 48 v1.0.2 scripts).
+Solid: DataStore patterns, server-authoritative economy, the v1.0.1
+camera fix, the corrected Rojo hierarchy, keybind consistency.
+Five most fragile findings (all addressed in v1.1 unless noted):
+
+1. **Attack (melee) and StealBrainrot server handlers had no client
+   FireServer calls — dead paths**, despite the menu advertising attack
+   and stealing as implemented. Fixed in Wave 3 (firers added).
+2. **Rebirth income contradiction** (+10% Config/ProgressionService vs
+   +25% BaseService fallback, load-order-dependent) plus two level-up
+   implementations with different rewards. Fixed in Wave 2/C:
+   Config +10% is the single source of truth on both paths.
+3. **Orphan remotes**: BossUpdate/SynergyUpdate never fired/listened;
+   UsePower/RequestCharacter/SettingsUpdate unwired;
+   RequestCollection/RequestEvents wired server-side but never invoked
+   by any client. Fixed in Wave 3 except UsePower/SettingsUpdate/
+   SynergyUpdate, which stay unwired by documented decision (see §12).
+4. **`SpawnQuestGiver`/`SpawnGuard` had no callers** — NPCService.Init
+   spawned nothing; no quest-giver NPC, no base guard. The merchant
+   hook now calls `SpawnQuestGiver` (Wave 2/C).
+5. **Stale headers, duplicated helpers (~24 files), 445 pcall lines**
+   mostly swallowing errors; banked-income cap 10,000 (a top base
+   fills it in <1s). Cap fixed in Wave 2/C (now scales with level /
+   rebirths / prestige).
+
+Integration contracts the workstreams had to respect (audit §4):
+Remotes.luau is the single source of truth (45 names in v1.0.2, 62 in
+v1.1); GameManager load order and the OPTIONAL_SERVICES pcall pattern
+(a new service needs an OPTIONAL_SERVICES entry AND a `loadOptional`
+branch); DataService DEFAULT_DATA shape + owned-instance record;
+EconomyService has NO AddCoins/AddGems API (coins via
+`DataService.AddCoins`, XP via `ProgressionService.AddXP`, gems/shards/
+crystals/tokens are direct field writes); MapBuilder accessors and zone
+folders; TideService reads TideChannel's direct BasePart children as
+the wave path; new-Brainrot rules (AbilityId must resolve in Powers,
+income in rarity bands, MutationCompatibility subset of 12, BodyShape
+must match a CharacterModels builder branch); a new power needs a def
+in Powers.PlayablePowers AND an effect branch in
+`AbilityService.UsePower` (def-only = silently ignored); a new tide
+variant needs a Config entry + a `runCycle` behaviour branch + a
+VARIATIONS fallback entry.
+
+## 10. v1.1 integration — what was wired (coordinator pass)
+
+- `GameManager`: 9 new services added to OPTIONAL_SERVICES
+  (LightingService, EnvironmentService, DimensionsService,
+  CompanionService, LaboratoryService, ExpeditionService,
+  TerritoryService, SecretService, AchievementService, after
+  ProgressionService); explicit `loadOptional` branches for
+  LaboratoryService (`Init(_dataService, mutationService,
+  _optional["FusionService"])`), TerritoryService
+  (`Init(_dataService, _map)`), SecretService
+  (`Init(_dataService, npcService)`), AchievementService
+  (`Init(_dataService, questService)`) — the generic fallback
+  `Init(_dataService, _economyService, _map)` would pass wrong args to
+  those four. Lighting/Environment/Dimensions/Companion/Expedition use
+  the generic fallback (signatures match).
+- `wireCrossLinks` gained `SetLightingService`,
+  `SetCompanionService`, `SetDimensionsService`,
+  `SetLaboratoryService`, `SetExpeditionService`,
+  `SetTerritoryService`, `SetSecretService`, `SetAchievementService`
+  (`SetLightingService` is consumed by DimensionsService).
+  `IsTideSurfer` callback also consults
+  `CompanionService.IsTideProtected` (lazy, pcall-guarded).
+- **EquipTitle handler wired** in AchievementService.Init
+  (QuestService retry pattern: task.spawn, 50 tries × 0.2 s, warn if
+  missing; accepts `{TitleId = id}` table or bare string; ownership
+  validated by SetEquippedTitle). AchievementController stale texts
+  updated (titles persist; status messages updated).
+- **All 6 companion bonuses wired:** IncomeBonus (BaseService via
+  EconomyService, Wave 2/C); TideProtection (GameManager IsTideSurfer);
+  CarrySpeed (CarryService `SetCompanionService` + `applyCarrySpeed`,
+  clamped 0.1–0.75); MutationBonus (BaseService lazy resolver,
+  applied in `singleIncome` on BOTH the Economy-mod path and the
+  fallback path, mutated instances only, max +0.15); RareDetection
+  (ConveyorService `pickRarity`: strongest detection bonus among
+  players in-game boosts Epic+ weights on the shared conveyor, capped
+  +20%, cached weights table never mutated — per-player roll impossible
+  since spawn has no buying player); RaidDetection (RaidService steal
+  channel extended: `channelSeconds = STEAL_CHANNEL +
+  clamp(GetRaidWarningSeconds(victim), 0, 7.5)`, max 10.5 s).
+- Stale `Utils.luau` comment fixed (claimed slam was on "E" — false
+  since v1.0.1; now notes Config is canonical Q/F/R).
+- D's Lighting-mood partial is resolved by the service existing:
+  TideService's `pcall(require(...))` for LightingService now
+  resolves, so variant moods use the real service instead of the
+  built-in `game.Lighting` tween fallback. D's BossUpdate partial is
+  resolved by the Wave 3 HUD listener. C's title-equip partial is
+  resolved by the EquipTitle handler above. C's dimension-gate
+  fails-open note no longer applies in the shipped wiring
+  (ProgressionService is linked). The remaining partials are listed
+  in §12.
+
+## 11. Tests actually executed for v1.1
+
+All run 2026-11-18/19 in this workspace, after the integration pass.
+Tools were re-downloaded into /tmp (it gets wiped between sessions):
+Luau 0.747 (`luau-ubuntu.zip` — the `luau-0.747-linux.zip` asset 404s),
+Rojo 7.7.1 (`rojo-7.7.1-linux-x86_64.zip` — the
+`rojo-7.7.1-linux.zip` asset name 404s), Lune 0.11.1, Node v24.22.1.
+
+| # | Test | Tool / command | Result |
+|---|---|---|---|
+| T12 | Luau compile, every file | `/tmp/luau-compile <file>` for all 68 `src/**/*.luau` (Luau 0.747, bare invocation — output bytecode to stdout, exit code checked) | **PASS 68/68, 0 failures.** (First attempt used a wrong `--format=summary` flag the binary rejects — a wrong invocation, not a code failure; re-run bare, all pass.) |
+| T13 | Luau strict analysis | `/tmp/luau-analyze --mode=strict <file>` per file (all 68) | **PASS with documented noise (same conclusion as v1.0.1 T2, at larger scale).** 6,764 single-line TypeError diagnostics: 4,514 "Unknown global" (`game`, `task`, `Color3`, `Enum`, `Instance`, `UDim2`, `script`, …), 1,274 "Unknown type" (Roblox classes: `Model`, `Humanoid`, `Frame`, `RemoteEvent`, …), 219 "Unknown require" (requires via `ReplicatedStorage:WaitForChild` / `script.Parent`), 39 `*error-type*` cascades, and ~718 downstream artifacts ("Type 'unknown'/'nil' does not have key …", operators on `unknown`, narrowing "Expected this to be unreachable") — **all rooted in the missing Roblox definitions**. Zero diagnostics independent of the missing defs. The single "Argument count mismatch" diagnostic is a valid `Instance:FindFirstChild(name, true)` call in `CharacterService.luau:123`, flagged only because the analyzer lacks the real Instance type. (An earlier per-file count of "98" was a miscount — `grep -c "error"` matched only lowercase `error`, i.e. `*error-type*` lines; the correct total is 6,764. Nothing was hidden; the classification above is from the full output, saved at `/tmp/analyze_all.txt` for this run.) No real defect found; nothing changed as a result of this test. |
+| T14 | Python static harness (70 checks) | `python3 scripts/harness-python.py` (read-only regex/JSON checks over `src/`; v1.1 update: 50 v1.0.2 checks with expectations moved to v1.1 + 20 new checks 51–70) | **PASS 70/70.** Covers: project JSON valid + `$className` + service mapping; 27-character roster with all AbilityIds resolving to Powers; `RarityWeights` sum 1.0 over 10 tiers; 10 tide variants with behaviour in TideService; `TideVariationsDisabled` deleted; 19 fusion recipes, all results real; 54 quests; 17 playable powers; 24 achievements + 13 titles; 6 expeditions; 7 territories; all 17 v1.1 remote names; GameManager registration of all 9 new services; EquipTitle handler; all 6 companion bonuses wired; Attack/Steal firers; RequestCollection/RequestEvents callers; BossUpdate listener; SpawnEffect dual-form; no `rbxassetid://` in code; stale Utils comment gone; DataService v1.1 fields; docs exist. First run: 69/70 — check 65 failed on two `rbxassetid://` mentions inside `SoundController.luau` **comments** (explaining that no invented IDs are used). That was a harness false positive, not game code; the check now strips `--` comments before searching. Re-run 70/70. The two make.fun-package-only checks from v1.0.2 (vendor file, PLAY.json.template) were replaced by GameManager registration + EquipTitle checks — they belong to the competition package, not the game tree. |
+| T15 | Lune pure-logic harness (40 checks) | `/tmp/lune-0.11.1/lune run scripts/harness-lune/main.luau` (loads the 15 shared modules with stubbed Roblox globals; refresh.sh re-copies `src/shared/*.luau` with the harness-only require patch) | **PASS 40/40.** Covers: GameVersion 1.1.0; rarity weights sum 1.0; plots/players 12; fusion costs; rebirth requirements; 10 tide variants, weights sum 100; 27-character roster, 10 rarities, positive income, AbilityIds resolve; 12 mutations, no Magma/Spectral; 19 fusion recipes incl. order-independence; FusionCost present/nil; XP/wave/KO scaling; synergy 0 for empty list, **2.8 for the full roster** (was 2.15 at 18 characters — recomputed from the code, not guessed); income formula; remotes; keybinds; 9 new characters resolve; 17 playable powers, every cooldown ≥ 3 s; 15 CompanionAbility entries; `TideVariationsDisabled` deleted; Dimensions Abyssal + Skyfall; 6 expeditions, 24 achievements, 13 titles; v1.1 remotes present. First run failed to start — /tmp had been wiped and the Lune binary was gone; re-downloaded 0.11.1 and re-ran green. |
+| T16 | Rojo build × 2 (determinism) | `/tmp/rojo-7.7.1/rojo build --output /tmp/GlitchTide_v11_a.rbxl` then `..._b.rbxl`, same project | **PASS — byte-identical.** Both builds SHA-256 `40f0cf4fd5bdf630687ebd4d3f0f9ae5ef849894697ebc3d6e4d27933d1b3af0`, 558,606 bytes. `cmp` confirms identical. Copy kept at `GlitchTide.rbxl` in the project root. |
+| T17 | Source-to-place byte matching | `python3 scripts/verify-rbxl.py GlitchTide.rbxl` (new script; parses the rbxl chunk stream — 16-byte chunk headers, LZ4 block decompression — and compares every Source PROP value against `src/`) | **PASS 68/68.** 68 Source values in the place (66 ModuleScript + 1 LocalScript + 1 Script); every src file present byte-for-byte, no extra sources, no duplicates. Header: 10 classes, 76 instances, 26 chunks. (Parser notes: chunk headers are 16 bytes — signature, compressed length, uncompressed length, reserved u32 — not 12 as the format summary in the v1.0.1 report implied; Source is stored as String type 0x01 in this Rojo build, not ProtectedString; the INST referent encoding was not reimplemented — the hierarchy check below uses Rojo's own tree instead.) |
+| T18 | Built-hierarchy verification | `rojo serve` + `/show-instances` (Rojo's own tree, rendered from the corrected project file) | **PASS.** 77 instances (76 + DataModel root). DataModel children: ReplicatedStorage, ServerScriptService, StarterGui, StarterPlayer, Workspace. `StarterGui → MainMenu (ModuleScript)` exactly once; `StarterPlayer → StarterPlayerScripts → Main (LocalScript) + Controllers/`; `ServerScriptService → Main (Script) + Services/`; `ReplicatedStorage → 15 shared ModuleScripts`; `Workspace` empty (map built at runtime by MapBuilder). The v1.0.2 packaging fix holds. |
+| T19 | JSON validation | `python3 -c "json.load(open('default.project.json'))"` + Rojo build (T16) succeeding | **PASS.** `default.project.json` is valid JSON; `rojo.toml` present. |
+| T20 | ZIP extraction test | (runs at packaging time — see §13) | Pending until the ZIP is built; the independent verifier re-runs it. |
+
+### Not applicable to the game tree (not failures)
+- `scripts/validate-package.py` is a **make.fun package** validator
+  (checks `main.ts`, `vendor/`, `PLAY.json.template` in a competition
+  package dir). Run against the game tree it fails with
+  `FileNotFoundError: main.ts` — expected; the game tree is not a
+  package. It is not run here.
+- `scripts/validate-screenshots.py` reports FAIL because no
+  `screenshots/` directory exists. That is by design: no screenshots
+  exist (none were fabricated) and none can be captured without Studio.
+- Icon validation: no icon file lives in the game tree (the
+  `icon-512.png` belongs to the make.fun package, not the game). Nothing
+  to validate here.
+
+### Failed tests (v1.1)
+**None.** No test executed in this pass failed on game code. The only
+failures encountered were wrong tool invocations / missing tools after
+the /tmp wipe (T12 flag, T15 missing Lune binary, T16 wrong Rojo asset
+name) and harness false positives (T14 check 65 comment mentions, T13
+miscount), all resolved and re-run green. See the per-test notes above.
+
+## 12. New + unresolved bug list (v1.1)
+
+Carried forward from §4/§5 where still true, plus new v1.1 items.
+"Implemented but not runtime tested" items are NOT listed here unless
+they have a known defect — see `FEATURE_CHECKLIST.md` and
+`docs/QA_V11_A.md` … `docs/QA_V11_E.md` for the full classification.
+
+| # | Item | Status / note |
+|---|---|---|
+| B1 | Abyssal boss altar spawns THE ALGORITHM in the Chaos Arena, not an Abyssal-local boss | Partial (Wave 1/A). `BossService.SpawnBoss()` takes no position. Needs a BossService change for an Abyssal-local boss fight. |
+| B2 | Dimension lighting moods (Abyssal/Skyfall) do not auto-apply | Partial (Wave 1/A). Lighting is global; auto-applying on one player's teleport would re-light the hub for everyone. Needs a server-wide decision or per-player client moods. |
+| B3 | Territory bonuses are a flat tick, not an income multiplier | Partial by deliberate design (Wave 2/C). 5/10/15 coins/s + 10/20/30 XP/min by tier, paid straight into Coins (never BankedIncome). A true multiplier needs a BaseService edit. |
+| B4 | Hidden merchant is a discovery trigger, not a shop | Partial (Wave 2/C). No secret shop inventory exists; a merchant shop (spending event tokens/shards) is a follow-up. |
+| B5 | Expedition on-expedition instances not blocked by Base/Mutation/Fusion | Partial (Wave 2/C). Enforced at the expedition API and hidden by the Wave 3 UI, but BaseService/MutationService/FusionService do not read the `OnExpedition` flag. Risk is reduced rewards only; the Brainrot is never lost. |
+| B6 | Dimension gate fails OPEN when ProgressionService is unwired | Known limitation (Wave 2/C). Does NOT apply in the shipped wiring (ProgressionService is linked in GameManager); only a risk if a future change unwires it. |
+| B7 | Tide EscapeRoutes (stage 5) not drawn on the client | Not implemented (Wave 3/E). The server broadcasts positions in the stage-5 Warning payload; no client map-marker API exists to draw them. |
+| B8 | Power mastery shown from session-only use counts | Partial (Wave 3/E). The server pushes no mastery state; the Shop shows mastery as a formula + session counts. |
+| B9 | 5 sound slots unassigned by design | marketAmbience, conveyorLoop, music, dimensionAmbience, tideSirenLoop — named slots that play nothing. No invented IDs. A guide for adding licensed IDs later is in `SoundController`. |
+| B10 | `UsePower` / `SettingsUpdate` / `SynergyUpdate` unwired by documented decision | `UsePower`: `AbilityService` uses `UseAbility` instead; nothing fires it. `SettingsUpdate`: no settings sync exists; mute/volume are client-local. `SynergyUpdate`: no server-side synergy event exists for clients to consume (synergy bonus is applied to base income and shown in the Shop). See `docs/REMOTES_WIRED_E.md`. |
+| B11 | Trading intentionally omitted; offline income absent; controller input unbound; procedural animation only | Unchanged from v1.0.2 (§5). |
+| B12 | Two minor map contacts (escape-ramp edge grazing a plot gate post; 2-stud channel/floor clip, no collision) | Unchanged from v1.0.2. Wave 1/A rewrote MapBuilder but did not move that geometry and did not re-measure it geometrically; cannot have got worse, not confirmed fixed. |
+| B13 | `RequestCharacter` (legacy) declared, no server handler, no client caller | Unchanged from v1.0.1 (§4). `Main.client` still waits for it. |
+| B14 | No synergy-formation quest; no boss-without-dying quest; no per-family quests | Not implemented (Wave 2/C). Synergy tracking belongs to D's domain (no server-side synergy event); flawless-tide + boss-defeat quests cover the boss case; families are not defined in the shared defs. |
+| B15 | Secret-encounter merchant/sighting has no NPC model of its own | The encounter is a roll + broadcast + payout; the merchant itself spawns via `NPCService.SpawnQuestGiver` (Wave 2/C consumes D's hook). |
+| B16 | Boss-tide survivor quests + boss tides: `TideService` quest hooks | Implemented in Wave 2/C (survivor quests incl. flawless no-damage tide). No known defect; listed so the Studio playtest covers them. |
+| B17 | `luau-analyze` strict-mode noise | 6,764 diagnostics, all rooted in missing Roblox definitions (T13). Not game defects; will disappear once Roblox definitions are present in Studio. |
+
+## 13. Delivery counts (v1.1) + paid-eligibility statement
+
+- 68 Luau files, 42,045 lines (was 48 files / 26,062 lines in v1.0.2;
+  +20 files, +15,983 lines). Breakdown: 15 shared modules, 30 server
+  services + `Main.server.luau`, 20 client controllers + `Main.client.luau`
+  + `MainMenu.luau`, `src/map` empty by design (MapBuilder builds at runtime).
+- 27 Brainrots (18 + 9 new), 12 mutations, 19 fusion recipes (10 + 9),
+  17 playable powers (12 + 5) + 27 character Q primaries, 13 synergies
+  (10 + 3), 54 quests (16 + 38), 24 achievements, 13 titles, 6
+  expeditions, 7 territories, 5 secrets, 10 working tide variants
+  (5 + 5 promoted), 3 bosses (1 + 2), 9 regions (7 + 2), 12 lighting
+  moods, 34 verified sound cues (+ 5 unassigned slots), 62 remote names
+  (45 + 17).
+- `GlitchTide.rbxl`: 558,606 bytes, Rojo 7.7.1, built twice
+  byte-identical, SHA-256
+  `40f0cf4fd5bdf630687ebd4d3f0f9ae5ef849894697ebc3d6e4d27933d1b3af0`;
+  all 68 script sources verified byte-for-byte inside (T17); hierarchy
+  verified via Rojo's own tree (T18).
+- Final ZIP: `~/workspace/your_files/GLITCH_TIDE_V1_1_EXPANDED.zip`
+  (built after this report; verified by clean-room unzip + diff -r —
+  see the parent report for exact size + SHA-256). Prior ZIPs
+  (`GLITCH_TIDE_FINAL_QA.zip`, `GLITCH_TIDE_MAKEFUN_READY.zip`,
+  `GLITCH_TIDE_FINAL_SUBMISSION_CANDIDATE.zip`) are NOT overwritten.
+
+### Paid eligibility — NOT claimed
+
+This version is **not claimed paid-eligible** for the make.fun bounty
+`roblox-brainrot-01`, and the expansion does not by itself make the
+entry paid-eligible. The recording/authorship rules are unchanged from
+the 2026-11-19 strict accountability audit: the game was built before
+any kit record command ran, so no sealed recording of its development
+exists; the strict-transcripts bounty takes sealed recordings only and
+`submit` refuses `--bundle`/`--transcript`, so there is no
+ranked-but-unpaid fallback. A fresh recorded rebuild would still need
+~10,860 genuinely new authored lines (gate: authored ÷ final total ≥
+30%) against ~2,500–4,000 lines of genuine open work in this expansion
+— a gap of ~7,000–8,000 lines — plus the parent-chain risk (sessions
+trace to the main chat begun 2026-09-26, before the bounty opened).
+Nothing in v1.1 changes any of that. What v1.1 does is make the game
+itself substantially more complete, polished, and impressive as a
+competition entry on its merits.
+
+### Still needs Studio (Grok Build)
+
+1. Playtest (solo + multi-client), including the camera regression
+   test (`GROK_BUILD_HANDOFF.md` §1) — **re-run after the overhaul**:
+   MapBuilder, LightingService, and CharacterModels all changed.
+2. The Part 33/36 acceptance scenario (§6) extended for v1.1:
+   spawn → base → market buy → carry → tide warning → escape →
+   place → income → upgrade → ability → mutation/fusion → quest →
+   save/rejoin → 2-player raid → **new**: teleport to Abyssal/Skyfall
+   → open a dimension chest → complete the Skyfall checkpoint run →
+   evolve a Brainrot in the Lab → start + claim an expedition →
+   capture a territory → defeat THE GLITCH COLOSSUS → survive a
+   Double/Dark/GiantBoss/Corrupted/Cosmic tide → equip a title.
+3. Screenshots (4 compositions in `docs/SHOT_LIST.md`) for the
+   competition package; `rojo serve` live sync; live DataStore
+   round-trip; 12-player full server; performance measurement.
+4. Publishing, icon/thumbnail upload, PLAY.json, and make.fun
+   submission remain Grok Build's job — nothing here submits, signs,
+   publishes, or creates a wallet.

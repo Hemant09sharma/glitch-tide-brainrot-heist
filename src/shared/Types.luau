@@ -22,6 +22,12 @@ export type CharacterDef = {
 	MutationCompatibility: { string },
 	Personality: string,
 	UnlockCondition: string,
+	-- v1.1 Wave 1 (Workstream B) mirror: the passive a Brainrot grants
+	-- its owner just by being owned (see shared/Companions.luau).
+	-- Kind: "IncomeBonus" | "TideProtection" | "RareDetection" |
+	-- "CarrySpeed" | "RaidDetection" | "MutationBonus"; Value is a
+	-- fraction (0.05 = +5%). Mirrors Characters.CompanionAbilityDef.
+	CompanionAbility: { Kind: string, Value: number }?,
 	BuildSpec: {
 		BodyColor: Color3,
 		HeadColor: Color3,
@@ -78,6 +84,22 @@ export type PlayerData = {
 	OwnedInstances: { OwnedBrainrot }?,
 	Unlocked: { string }?,
 	Selected: string?,
+	-- v1.1 Wave 2 (Workstream C) persistence fields (all optional /
+	-- nil-safe; DataService.applyDefaults seeds them). Expeditions:
+	-- {Active, Completed}; Achievements: {[id] = {Progress, Unlocked}};
+	-- Titles: {string}; Prestige: number; LabDiscoveries /
+	-- SecretDiscoveries / DimensionUnlocks: {[id] = true}; Mastery:
+	-- {[characterId] = xp}; ProgressionMilestones: {[id] = true}.
+	Expeditions: { [string]: any }?,
+	Achievements: { [string]: any }?,
+	Titles: { string }?,
+	EquippedTitle: string?,
+	Prestige: number?,
+	LabDiscoveries: { [string]: boolean }?,
+	SecretDiscoveries: { [string]: boolean }?,
+	DimensionUnlocks: { [string]: boolean }?,
+	Mastery: { [string]: number }?,
+	ProgressionMilestones: { [string]: boolean }?,
 }
 
 -- One quest as QuestService.GetQuests returns it (QuestUpdate push and
@@ -139,6 +161,19 @@ export type OwnedBrainrot = {
 	Mutation: string?,
 	PlacedSlot: number?,
 	AcquiredAt: number,
+	-- v1.1 Wave 2 (Workstream C) instance fields, all optional:
+	-- Placed / Slot mirror BaseService state; Glitched pays x2 income;
+	-- Evolved / EvolvedTrait / EvolvedFormName are set by
+	-- LaboratoryService.EvolveBrainrot; TraitLevels maps trait id ->
+	-- level (max 3); OnExpedition is set while the instance is away.
+	Placed: boolean?,
+	Slot: number?,
+	Glitched: boolean?,
+	Evolved: boolean?,
+	EvolvedTrait: string?,
+	EvolvedFormName: string?,
+	TraitLevels: { [string]: number }?,
+	OnExpedition: boolean?,
 }
 
 -- A player's currency balances.

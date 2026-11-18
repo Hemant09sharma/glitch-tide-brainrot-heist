@@ -56,6 +56,21 @@ local DEFAULT_DATA = {
 	Rebirths = 0,
 	OwnedInstances = {},
 	BankedIncome = 0,
+	-- v1.1 Wave 2 (Workstream C) persistence fields. All new fields
+	-- only, with safe defaults in applyDefaults below so existing
+	-- saves load with them empty / zero.
+	Expeditions = { Active = nil, Completed = 0 },
+	Achievements = {},
+	Titles = {},
+	EquippedTitle = "",
+	Prestige = 0,
+	LabDiscoveries = {},
+	SecretDiscoveries = {},
+	SecretRunes = {},
+	DimensionUnlocks = {},
+	Mastery = {},
+	ProgressionMilestones = {},
+	Challenges = {},
 }
 
 local _store = nil
@@ -107,6 +122,26 @@ local function applyDefaults(data)
 	end
 	if type(merged.Rebirths) ~= "number" then
 		merged.Rebirths = 0
+	end
+	-- v1.1 Wave 2 (Workstream C): new fields only — nil-safe loads for
+	-- existing saves. Tables are re-created empty when missing or of
+	-- the wrong type; numbers default to 0; EquippedTitle to "".
+	if type(merged.Expeditions) ~= "table" then
+		merged.Expeditions = { Active = nil, Completed = 0 }
+	end
+	if type(merged.Expeditions.Completed) ~= "number" then
+		merged.Expeditions.Completed = 0
+	end
+	for _, field in ipairs({ "Achievements", "Titles", "LabDiscoveries", "SecretDiscoveries", "SecretRunes", "DimensionUnlocks", "Mastery", "ProgressionMilestones", "Challenges" }) do
+		if type(merged[field]) ~= "table" then
+			merged[field] = {}
+		end
+	end
+	if type(merged.EquippedTitle) ~= "string" then
+		merged.EquippedTitle = ""
+	end
+	if type(merged.Prestige) ~= "number" then
+		merged.Prestige = 0
 	end
 	for _, currency in ipairs({ "Gems", "ChaosShards", "MutationCrystals", "EventTokens" }) do
 		if type(merged[currency]) ~= "number" then

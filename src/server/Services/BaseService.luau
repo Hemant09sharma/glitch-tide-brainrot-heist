@@ -27,6 +27,7 @@ local _mutationService: any = nil
 local _raidService: any = nil
 local _progressionService: any = nil
 local _eventService: any = nil
+local _economyService: any = nil
 local _tideMultiplier = 1
 local _running = false
 
@@ -39,7 +40,17 @@ local _lastCall: { [Player]: number } = {}
 
 local MIN_CALL_INTERVAL = 0.25
 local PLACE_DISTANCE = 12
-local BANKED_CAP = 10000
+-- v1.1 Wave 2 (Workstream C, fix 8c): the banked-income cap. The old
+-- flat BANKED_CAP = 10,000 filled in under a second at top-tier
+-- incomes (Void Vulture 11,000/s, Wobble King 18,000/s — audit §3
+-- F11), so high-tier owners lost everything unless they collected
+-- constantly. The cap now scales with progression (see bankedCapFor
+-- below) — still a real cap, not infinite: base 100,000 + 5,000 per
+-- level + 10,000 per rebirth + 25,000 per prestige rank. A level-1
+-- player caps at 105,000 (hours of their income — the cap never binds
+-- early); a level-25, 10-rebirth player caps at 325,000 (roughly a
+-- minute of a strong endgame base — CollectIncome still matters).
+local BANKED_CAP_BASE = 100000
 local UPGRADE_KINDS = { "BaseSlot", "IncomeMultiplier", "Lock", "Turret", "ConveyorLuck" }
 
 local _economyMod: any = nil
@@ -310,6 +321,46 @@ local function mutationIncomeMultiplier(mutationId: any, glitched: boolean): num
 	return 1
 end
 
+-- v1.1 companion MutationBonus: an extra fraction on the income of
+-- MUTATED Brainrots only (CompanionService.GetMutationIncomeBonus,
+-- max +0.15). Resolved lazily like the other sibling services; 0
+-- when CompanionService is absent or errors.
+local _companionService: any = nil
+local _companionResolved = false
+local function companionMutationBonus(player: Player): number
+	if not _companionResolved then
+		_companionResolved = true
+		pcall(function()
+			local mod = script.Parent:FindFirstChild("CompanionService")
+			if mod then
+				local svc = require(mod)
+				if type(svc.GetMutationIncomeBonus) == "function" then
+					_companionService = svc
+				end
+			end
+		end)
+	end
+	if _companionService == nil then
+		return 0
+	end
+	local ok, bonus = pcall(_companionService.GetMutationIncomeBonus, player)
+	if ok and type(bonus) == "number" then
+		return math.clamp(bonus, 0, 0.15)
+	end
+	return 0
+end
+
+local function applyCompanionMutationBonus(player: Player, mutation: any, income: number): number
+	if type(mutation) ~= "string" or mutation == "" then
+		return income
+	end
+	local bonus = companionMutationBonus(player)
+	if bonus <= 0 then
+		return income
+	end
+	return income * (1 + bonus)
+end
+
 local function findPlaced(base: any, instanceId: string): (number?, { [string]: any }?)
 	for i, record in ipairs(base.Placed) do
 		if record.InstanceId == instanceId then
@@ -377,7 +428,7 @@ local function singleIncome(player: Player, placed: { [string]: any }): number
 			Mutation = mutation,
 		})
 		if ok and type(income) == "number" then
-			return income
+			return applyCompanionMutationBonus(player, mutation, income)
 		end
 	end
 	local def = Characters.GetById(placed.CharacterId)
@@ -389,7 +440,7 @@ local function singleIncome(player: Player, placed: { [string]: any }): number
 	if glitched then
 		income *= 2
 	end
-	return income * mutationIncomeMultiplier(mutation, glitched)
+	return applyCompanionMutationBonus(player, mutation, income * mutationIncomeMultiplier(mutation, glitched))
 end
 
 -- Event income multiplier: Golden Hour pays 2x while active
@@ -408,12 +459,17 @@ local function eventIncomeMultiplier(): number
 	return 1
 end
 
--- Rebirth income multiplier: 1 + 25% per rebirth. Prefers
--- ProgressionService when wired (SetProgressionService); otherwise
--- reads data.Rebirths with the same +25% step ProgressionService
--- uses (its REBIRTH_INCOME_PER — Config's
--- RebirthRequirements.IncomeBonusPerRebirth of 0.10 is stale and
--- unused by the live rebirth implementation).
+-- Rebirth income multiplier: Config is the SINGLE source of truth —
+-- +10% per rebirth (Config.RebirthRequirements.IncomeBonusPerRebirth).
+-- Prefers ProgressionService when wired (SetProgressionService); its
+-- GetIncomeMultiplier reads the same Config value, plus prestige
+-- (+5%/rank) and mastery bonuses. Otherwise reads data.Rebirths with
+-- the SAME +10% step, plus the +5% per prestige rank mirror
+-- (ProgressionService.PRESTIGE_INCOME_PER_RANK). v1.0.2 fell back to
+-- +25% here and its comment called Config's 0.10 "stale and unused" —
+-- that was wrong: live behaviour was +10% when wired and +25% when
+-- not, a silent 2.5x divergence depending on load order (audit §3
+-- F2). Both paths now agree at +10%.
 local function rebirthIncomeMultiplier(player: Player): number
 	if _progressionService ~= nil and type(_progressionService.GetIncomeMultiplier) == "function" then
 		local ok, value = pcall(_progressionService.GetIncomeMultiplier, player)
@@ -423,7 +479,43 @@ local function rebirthIncomeMultiplier(player: Player): number
 	end
 	local data = _dataService.GetData(player)
 	local rebirths = data ~= nil and (tonumber(data.Rebirths) or 0) or 0
-	return 1 + math.max(0, rebirths) * 0.25
+	local prestige = data ~= nil and (tonumber(data.Prestige) or 0) or 0
+	local perRebirth = 0.10
+	if Config.RebirthRequirements and tonumber(Config.RebirthRequirements.IncomeBonusPerRebirth) then
+		perRebirth = tonumber(Config.RebirthRequirements.IncomeBonusPerRebirth) :: number
+	end
+	return 1 + math.max(0, rebirths) * perRebirth + math.max(0, prestige) * 0.05
+end
+
+-- Banked-income cap for a player (fix 8c — see BANKED_CAP_BASE).
+local function bankedCapFor(player: Player): number
+	local data = _dataService.GetData(player)
+	local level = data ~= nil and (tonumber(data.Level) or 1) or 1
+	local rebirths = data ~= nil and (tonumber(data.Rebirths) or 0) or 0
+	local prestige = data ~= nil and (tonumber(data.Prestige) or 0) or 0
+	return BANKED_CAP_BASE + level * 5000 + rebirths * 10000 + prestige * 25000
+end
+
+-- Companion income multiplier (v1.1 Wave 1/2, fix 8a): the EconomyService
+-- hook B documented — EconomyService.GetCompanionIncomeMultiplier
+-- returns 1 + the player's capped companion IncomeBonus (max 1.25),
+-- or 1 when no companion service is linked. Resolved lazily from the
+-- sibling module so no GameManager edit is needed; SetEconomyService
+-- below lets the integrator wire it explicitly instead.
+local function resolveEconomyService(): any
+	if _economyService ~= nil then
+		return _economyService
+	end
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("EconomyService")
+		if mod then
+			local candidate = require(mod)
+			if type(candidate.GetCompanionIncomeMultiplier) == "function" then
+				_economyService = candidate
+			end
+		end
+	end)
+	return _economyService
 end
 
 -- Effective pedestal slots: bought slots plus the rebirth bonus
@@ -473,6 +565,18 @@ function BaseService.GetIncomePerSec(player: Player): number
 		local ok, bonus = pcall(_synergiesMod.GetSynergyBonusForCharacters, characterIds)
 		if ok and type(bonus) == "number" and bonus > 0 then
 			total *= (1 + bonus)
+		end
+	end
+	-- Companion income (v1.1 Wave 1/2, fix 8a — the one-liner B
+	-- documented): multiply by EconomyService's companion income
+	-- multiplier (1 + capped companion IncomeBonus, max 1.25; 1 when
+	-- no companion service is linked, so unwired servers are
+	-- unaffected).
+	local economyService = resolveEconomyService()
+	if economyService ~= nil and type(economyService.GetCompanionIncomeMultiplier) == "function" then
+		local ok, mult = pcall(economyService.GetCompanionIncomeMultiplier, player)
+		if ok and type(mult) == "number" and mult > 0 then
+			total *= mult
 		end
 	end
 	return total
@@ -641,10 +745,21 @@ function BaseService.SetRaidService(raidService: any): ()
 end
 
 -- ProgressionService supplies the live rebirth income multiplier
--- (GetIncomeMultiplier). Wiring is optional: without it, income falls
--- back to data.Rebirths x +25% per rebirth (same step).
+-- (GetIncomeMultiplier — Config's +10%/rebirth, plus prestige and
+-- mastery). Wiring is optional: without it, income falls back to
+-- data.Rebirths x +10% per rebirth (same step — see
+-- rebirthIncomeMultiplier above).
 function BaseService.SetProgressionService(progressionService: any): ()
 	_progressionService = progressionService
+end
+
+-- EconomyService supplies the live companion income multiplier
+-- (GetCompanionIncomeMultiplier — 1 + capped companion IncomeBonus).
+-- Wiring is optional: without it, BaseService lazily requires the
+-- sibling EconomyService module itself (resolveEconomyService), and
+-- without any companion service linked the multiplier is 1.
+function BaseService.SetEconomyService(economyService: any): ()
+	_economyService = economyService
 end
 
 -- EventService supplies the live event income multiplier
@@ -1392,7 +1507,7 @@ function BaseService.Init(dataService: any, map: Model?): ()
 					local rate = BaseService.GetIncomePerSec(player)
 					if rate > 0 then
 						local banked = (tonumber(data.BankedIncome) or 0) + rate * dt
-						data.BankedIncome = math.min(banked, BANKED_CAP)
+						data.BankedIncome = math.min(banked, bankedCapFor(player))
 					end
 				end)
 			end

@@ -23,6 +23,11 @@
 -- ever acts through a ProximityPrompt or an explicit panel (Market /
 -- Shop / Base). If the map team ever tags parts, re-add a scan here
 -- and set InteractType/InteractId in MapBuilder at the same time.
+-- Wave 3 (v1.1 E) ADDS ONE scan back, deliberately: the steal scan.
+-- It does NOT use InteractType attributes — it reads the placed-model
+-- names the server itself creates ("Placed_<InstanceId>") plus the
+-- plot OwnerSigns, cached every 5s, and it is the StealBrainrot
+-- firer audit F1 was missing. See findNearestStealable().
 --   InteractType = "Conveyor" | "BaseSlot" | "Base" | "Pickup" |
 --                  "NPC" | "Mutation" | "UpgradeStation"
 --   InteractId   = id passed to the remote
@@ -76,6 +81,31 @@ local currentPromptText: string = ""
 -- While a server NPC dialogue is showing, the 0.25s scan loop must not
 -- overwrite the prompt text with the nearest-target prompt.
 local dialogueShowing = false
+
+-- STEAL (v1.1 E, audit F1): the StealBrainrot remote had a server
+-- handler (RaidService.onSteal) but NO client firer. The scan below
+-- is the firer. Design (see QA_V11_E.md §13):
+-- * Placed world models are named "Placed_<InstanceId>" (BaseService).
+-- * Own instances (from RequestBase) are never steal targets.
+-- * Victim resolution: nearest OwnerSign ("BASE n\n<ownerName>") within
+--   ~25 studs of the model, matched to Players:GetPlayers() by name;
+--   fallback: nearest OTHER player within 30 studs of the model.
+-- * Fire {VictimUserId, InstanceId}. Client debounce 1s (server rate)
+--   + 60s per-victim pair cooldown tracked client-side.
+-- * The server still validates everything (protection, cooldown, gate,
+--   25-stud distance); a StealAlert Phase "Started" with
+--   Thief == LocalPlayer is the success signal, and a 5s watchdog
+--   reports a generic failure otherwise (the server sends no failure
+--   payload).
+-- PERFORMANCE: the descendants walk runs once every 5s into a cache
+-- (placed models + owner signs); the 0.25s tick only measures
+-- distances against the cache, so the scan costs ~nothing per tick.
+local ownPlacedIds: { [string]: boolean } = {}
+local placedCache: { { model: Model, instanceId: string, position: Vector3 } } = {}
+local signCache: { { position: Vector3, ownerName: string } } = {}
+local stealCooldowns: { [number]: number } = {}
+local stealPending: boolean = false
+local stealPendingVictim: number? = nil
 
 -- (INTERACT_RANGE removed with the attribute scan: no distance check
 -- is needed while findNearest is inert. Re-add it if a scan returns.)
@@ -135,6 +165,8 @@ local function playSound(name: string)
 				sound.PlayPlace()
 			elseif name == "click" and sound.PlayClick then
 				sound.PlayClick()
+			elseif name == "steal" and sound.PlayStealAlarm then
+				sound.PlayStealAlarm()
 			end
 		end
 	end)
@@ -190,6 +222,199 @@ local function findNearest(): any?
 	return nil
 end
 
+-- ---- Steal scan (v1.1 E) --------------------------------------------------
+local function refreshOwnPlacedIds()
+	local remote = getRemote(remoteName("RequestBase", "RequestBase"))
+	if not remote or not remote:IsA("RemoteFunction") then
+		return
+	end
+	local ok, base = pcall(function()
+		return (remote :: RemoteFunction):InvokeServer()
+	end)
+	if not ok or typeof(base) ~= "table" then
+		return
+	end
+	local nextIds: { [string]: boolean } = {}
+	for _, inst in ipairs(base.Placed or {}) do
+		if typeof(inst) == "table" and typeof(inst.InstanceId) == "string" then
+			nextIds[inst.InstanceId] = true
+		end
+	end
+	for _, inst in ipairs(base.Unplaced or {}) do
+		if typeof(inst) == "table" and typeof(inst.InstanceId) == "string" then
+			nextIds[inst.InstanceId] = true
+		end
+	end
+	ownPlacedIds = nextIds
+end
+
+-- One descendants walk every 5s (called from the scan loop): rebuild
+-- the placed-model cache and the owner-sign cache.
+local function refreshPlacedCache()
+	local nextPlaced: { { model: Model, instanceId: string, position: Vector3 } } = {}
+	local nextSigns: { { position: Vector3, ownerName: string } } = {}
+	local ok, err = pcall(function()
+		for _, desc in ipairs(workspace:GetDescendants()) do
+			if desc:IsA("Model") then
+				local name = desc.Name
+				if string.sub(name, 1, 7) == "Placed_" then
+					local id = string.sub(name, 8)
+					if id ~= "" then
+						local pos: Vector3? = nil
+						local primary = desc.PrimaryPart
+						if primary then
+							pos = primary.Position
+						else
+							local first = desc:FindFirstChildWhichIsA("BasePart")
+							if first then
+								pos = first.Position
+							end
+						end
+						if pos then
+							table.insert(nextPlaced, { model = desc, instanceId = id, position = pos })
+						end
+					end
+				end
+			elseif desc:IsA("BasePart") and desc.Name == "OwnerSign" then
+				local labelGui = desc:FindFirstChild("LabelGui")
+				local titleLabel: TextLabel? = nil
+				if labelGui then
+					titleLabel = labelGui:FindFirstChild("Title")
+				end
+				if titleLabel and titleLabel:IsA("TextLabel") then
+					-- Text is "BASE n\n<ownerName>" or "BASE n\n(unclaimed)".
+					local lines = string.split(titleLabel.Text, "\n")
+					local owner = lines[2]
+					if typeof(owner) == "string" and owner ~= "" and owner ~= "(unclaimed)" then
+						table.insert(nextSigns, { position = desc.Position, ownerName = owner })
+					end
+				end
+			end
+		end
+	end)
+	if ok then
+		placedCache = nextPlaced
+		signCache = nextSigns
+	else
+		warn("[GlitchTide] InteractionController steal cache refresh failed: " .. tostring(err))
+	end
+end
+
+-- Nearest stealable placed Brainrot within ~8 studs of the player.
+-- Returns {kind="Steal", id, victimUserId, victimName} or nil.
+local function findNearestStealable(): any?
+	if carrying then
+		return nil
+	end
+	local root = getRoot()
+	if not root then
+		return nil
+	end
+	local rootPos = root.Position
+	local best: any = nil
+	local bestDist = 8
+	for _, entry in placedCache do
+		if ownPlacedIds[entry.instanceId] then
+			continue -- never steal your own Brainrot
+		end
+		local dist = (entry.position - rootPos).Magnitude
+		if dist < bestDist then
+			bestDist = dist
+			best = entry
+		end
+	end
+	if not best then
+		return nil
+	end
+	-- Victim resolution: nearest owner sign within 25 studs, else
+	-- nearest other player within 30 studs of the model.
+	local victimUserId: number? = nil
+	local victimName: string? = nil
+	local bestSignDist = 25
+	for _, sign in signCache do
+		local dist = (sign.position - best.position).Magnitude
+		if dist < bestSignDist then
+			bestSignDist = dist
+			victimName = sign.ownerName
+		end
+	end
+	if victimName then
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player.Name == victimName and player ~= LocalPlayer then
+				victimUserId = player.UserId
+				break
+			end
+		end
+	end
+	if not victimUserId then
+		local bestPlayerDist = 30
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player == LocalPlayer then
+				continue
+			end
+			local char = player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if hrp and hrp:IsA("BasePart") then
+				local dist = (hrp.Position - best.position).Magnitude
+				if dist < bestPlayerDist then
+					bestPlayerDist = dist
+					victimUserId = player.UserId
+					victimName = player.Name
+				end
+			end
+		end
+	end
+	if not victimUserId then
+		return nil
+	end
+	return {
+		kind = "Steal",
+		id = best.instanceId,
+		victimUserId = victimUserId,
+		victimName = victimName,
+	}
+end
+
+local function armStealWatchdog(victimUserId: number)
+	stealPending = true
+	stealPendingVictim = victimUserId
+	task.delay(5, function()
+		if stealPending and stealPendingVictim == victimUserId then
+			stealPending = false
+			stealPendingVictim = nil
+			showPrompt("The steal didn't go through — the base may be protected, on cooldown, or too far away.")
+			task.delay(2, function()
+				if not currentTarget and not dialogueShowing then
+					showPrompt(promptFor(currentTarget))
+				end
+			end)
+		end
+	end)
+end
+
+function InteractionController.ApplyStealAlert(payload: any)
+	if typeof(payload) ~= "table" then
+		return
+	end
+	-- Actual payload: {Thief, ThiefUserId, Victim, CharacterId, Phase}
+	-- (+ a Lockdown variant {Victim, Phase="Lockdown", Duration}).
+	local phase = tostring(payload.Phase or "")
+	if phase == "Started" and tostring(payload.Thief or "") == LocalPlayer.Name then
+		stealPending = false
+		stealPendingVictim = nil
+		showPrompt("🏃 You grabbed a Brainrot — run it back to your base!")
+		playSound("steal")
+	elseif phase == "Success" and tostring(payload.Thief or "") == LocalPlayer.Name then
+		showPrompt("✅ Stolen Brainrot delivered to your base!")
+	elseif phase == "Failed" and tostring(payload.Thief or "") == LocalPlayer.Name then
+		stealPending = false
+		stealPendingVictim = nil
+		showPrompt("The steal failed — the base was protected.")
+	elseif phase == "Lockdown" and tostring(payload.Victim or "") == LocalPlayer.Name then
+		showPrompt("🔒 Your base is on lockdown for " .. tostring(payload.Duration or "?") .. "s!")
+	end
+end
+
 local function promptFor(target: any): string?
 	if not target then
 		return nil
@@ -216,6 +441,10 @@ local function promptFor(target: any): string?
 		return key .. " — Mutate " .. name
 	elseif kind == "UpgradeStation" then
 		return key .. " — Upgrade at station"
+	elseif kind == "Steal" then
+		-- Steal target: another player's placed Brainrot within reach.
+		local victim = tostring(target.victimName or "another player")
+		return key .. " — Steal Brainrot from " .. victim
 	end
 	return key .. " — Interact"
 end
@@ -350,6 +579,41 @@ function InteractionController.Interact()
 				end
 			end
 		end)
+	elseif kind == "Steal" then
+		-- StealBrainrot (v1.1 E): the firer audit F1 was missing.
+		-- Payload is a table {VictimUserId, InstanceId} — the bare
+		-- string form fails server-side (victim missing). Client
+		-- debounce 1s (server rate) + 60s per-victim pair cooldown;
+		-- the server still validates protection / cooldown / gate /
+		-- 25-stud distance, and the 5s watchdog reports a generic
+		-- failure if no StealAlert "Started" arrives.
+		local victimUserId = target.victimUserId
+		local instanceId = target.id
+		if typeof(victimUserId) ~= "number" or typeof(instanceId) ~= "string" then
+			showPrompt("Can't steal this one — no owner found nearby.")
+			return
+		end
+		local now = os.clock()
+		local last = stealCooldowns[victimUserId] or 0
+		if now - last < 60 then
+			showPrompt("You already tried " .. tostring(target.victimName or "that player") .. " recently — wait " .. tostring(math.ceil(60 - (now - last))) .. "s.")
+			return
+		end
+		if stealPending then
+			showPrompt("A steal is already in progress…")
+			return
+		end
+		stealCooldowns[victimUserId] = now
+		local fired = fireRemote("StealBrainrot", "StealBrainrot", {
+			VictimUserId = victimUserId,
+			InstanceId = instanceId,
+		})
+		if fired then
+			armStealWatchdog(victimUserId)
+			showPrompt("🏃 Grabbing it — run!")
+		else
+			showPrompt("StealBrainrot remote is not available yet.")
+		end
 	end
 end
 
@@ -523,14 +787,44 @@ function InteractionController.Init()
 
 	-- Nearest-target scan. Skips the prompt refresh while a server NPC
 	-- dialogue is showing (ShowDialogue owns the prompt then).
+	-- Wave 3 (v1.1 E): the steal scan runs here too, inside the same
+	-- 0.25s loop — no new loop. The placed-model cache refreshes once
+	-- every 5s (20 ticks); per-tick work is distance checks only.
+	local scanTick = 0
 	task.spawn(function()
+		refreshOwnPlacedIds()
+		refreshPlacedCache()
 		while true do
 			task.wait(0.25)
-			local target = findNearest()
+			scanTick += 1
+			if scanTick % 20 == 0 then
+				refreshPlacedCache()
+			end
+			if scanTick % 120 == 0 then
+				refreshOwnPlacedIds()
+			end
+			local target = findNearest() or findNearestStealable()
 			currentTarget = target
 			if not dialogueShowing then
 				showPrompt(promptFor(target))
 			end
+		end
+	end)
+
+	-- StealAlert feed (v1.1 E): the steal watchdog + prompts live here;
+	-- BaseController also listens for its own alert banner.
+	task.spawn(function()
+		local folder = getRemotesFolder()
+		if not folder then
+			return
+		end
+		local ok, remote = pcall(function()
+			return folder:WaitForChild(remoteName("StealAlert", "StealAlert"), 30)
+		end)
+		if ok and remote and remote:IsA("RemoteEvent") then
+			(remote :: RemoteEvent).OnClientEvent:Connect(function(payload: any)
+				InteractionController.ApplyStealAlert(payload)
+			end)
 		end
 	end)
 

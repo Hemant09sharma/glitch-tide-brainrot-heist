@@ -147,8 +147,15 @@ local function applyCarrySpeed(player: Player, carrying: boolean): ()
 		return
 	end
 	if carrying then
-		humanoid.WalkSpeed = (tonumber(Config.BaseWalkSpeed) or 16)
-			* (tonumber(Config.CarrySpeedMultiplier) or 0.6)
+		local carryMult = tonumber(Config.CarrySpeedMultiplier) or 0.6
+		-- v1.1: companion CarrySpeed bonus (max 0.75 total).
+		if _companionService ~= nil then
+			local ok, mult = pcall(_companionService.GetCarrySpeedMultiplier, player)
+			if ok and type(mult) == "number" then
+				carryMult = math.clamp(mult, 0.1, 0.75)
+			end
+		end
+		humanoid.WalkSpeed = (tonumber(Config.BaseWalkSpeed) or 16) * carryMult
 	else
 		humanoid.WalkSpeed = tonumber(Config.BaseWalkSpeed) or 16
 	end
@@ -378,6 +385,16 @@ end
 
 function CarryService.SetRaidService(raidService: any): ()
 	_raidService = raidService
+end
+
+-- v1.1 companion CarrySpeed: CompanionService.GetCarrySpeedMultiplier
+-- (Config base 0.6 + bonus, capped at 0.75). Wired via GameManager's
+-- wireCrossLinks (SetCompanionService is in its shared table).
+local _companionService: any = nil
+function CarryService.SetCompanionService(companionService: any): ()
+	if companionService and type(companionService.GetCarrySpeedMultiplier) == "function" then
+		_companionService = companionService
+	end
 end
 
 -- Clear carry state without dropping a world model (place / silent cleanup).

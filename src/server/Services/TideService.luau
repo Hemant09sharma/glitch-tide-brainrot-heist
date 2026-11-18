@@ -1971,6 +1971,15 @@ local function runCycle(variationId: string?)
 				end)
 			end
 		end
+		-- v1.1 (Workstream C): quest-progress hook — flawless survival
+		-- (never hit this tide) has no RecordEvent coverage yet.
+		if _questService and type(_questService.ReportProgress) == "function" then
+			if _hitThisTide[player] == nil then
+				pcall(function()
+					_questService.ReportProgress(player, "tide_flawless", "flawless", 1)
+				end)
+			end
+		end
 	end
 	-- TideSurvivor remote (exists in Remotes.Names; v1.0.0 never fired it).
 	fireAll(_names.TideSurvivor, {

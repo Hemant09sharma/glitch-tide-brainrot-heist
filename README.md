@@ -7,21 +7,42 @@ carry them home, place them in your base to earn passive income, upgrade your
 defences, and steal from rival bases — while the Glitch Tide periodically
 floods the map with corrupted, high-value Brainrots.
 
-**Status (2026-11-18, v1.0.2):** the Rojo project tree is complete on disk
-(48 Luau files, 26,062 lines) and the place file **is included**:
+**Status (2026-11-19, v1.1.0 — EXTREME EXPANSION):** the Rojo project tree is complete on disk
+(68 Luau files, 42,045 lines) and the place file **is included**:
 `GlitchTide.rbxl` was built in this workspace with
-Rojo 7.7.1 (`rojo build -o GlitchTide.rbxl`) and verified to contain all
-48 script sources, with `MainMenu` under the real `StarterGui` service
-and `Main` + `Controllers/` under `StarterPlayerScripts` (v1.0.2
-packaging fix — see §10 and §12). Static verification also ran here:
-`luau-compile` 48/48, `luau-analyze` (Roblox-def noise only, no real defects on edited
-lines), a 47-check Python static harness (all pass) and a 33-check Lune
-pure-logic harness (all pass) — see `QA_TEST_REPORT.md`. **No Studio
+Rojo 7.7.1 (`rojo build -o GlitchTide.rbxl`, built twice — byte-identical,
+SHA-256 `40f0cf4fd5bdf630687ebd4d3f0f9ae5ef849894697ebc3d6e4d27933d1b3af0`,
+558,606 bytes) and verified to contain all
+68 script sources byte-for-byte, with `MainMenu` under the real `StarterGui` service
+and `Main` + `Controllers/` under `StarterPlayerScripts` (see §10 and §12).
+Static verification also ran here:
+`luau-compile` 68/68, a 70-check Python static harness (all pass) and a 40-check Lune
+pure-logic harness (all pass) — see `QA_TEST_REPORT.md` §9–§13. **No Studio
 playtest has been run from this workspace** — no screenshots or
 recordings exist, and the game has not been published or submitted
 anywhere. Publishing and submission are Grok Build's job — see
 `GROK_BUILD_HANDOFF.md`. The camera regression test in
-`GROK_BUILD_HANDOFF.md` §1 must run first in Studio.
+`GROK_BUILD_HANDOFF.md` §1 must run first in Studio, and again after this
+overhaul (map, lighting, and character models all changed).
+
+**What v1.1 adds over v1.0.2:** visual overhaul of all 7 regions
+(`MapBuilder` rewritten, `LightingService` with 12 moods,
+`EnvironmentService` animation) + **2 new functional regions**
+(Abyssal Kingdom, Skyfall Kingdom); roster **18 → 27** Brainrots with
+companion abilities on 15 of them; **10 working tide variants**
+(Double/Dark/GiantBoss promoted out of data-only) with a 10-stage
+cinematic anticipation; **2 new bosses** (THE GLITCH COLOSSUS,
+THE VOID EMPEROR); Brainrot Laboratory (Evolve, trait upgrades, secret
+recipes, alternate forms), Expeditions, Territory Control, Secret
+Discovery, Achievements module (24 achievements, 13 titles), prestige,
+54 quests (was 16), 5 new powers (17 total), power mastery, UI redesign
+(6 new panels), 34 verified built-in sound cues, dead-path fixes
+(Attack/Steal firers, `RequestCollection`/`RequestEvents` callers,
+`BossUpdate` listener), and all 6 companion bonuses wired end-to-end.
+See `CHANGELOG.md` and `FEATURE_CHECKLIST.md` for the per-feature
+Part 16 classification. **This version is not claimed paid-eligible
+for the make.fun bounty** — the recording/authorship rules are
+unchanged (see `QA_TEST_REPORT.md` §13).
 
 ---
 
@@ -35,6 +56,13 @@ anywhere. Publishing and submission are Grok Build's job — see
 | Build tool | Rojo 7.7.1 (`default.project.json` + `rojo.toml`) — place file `GlitchTide.rbxl` included |
 | Players | 2–12 per server (lobby 20 s, round 180 s, intermission 15 s) |
 | Base plots | 12 — one per player, equal to MaxPlayers |
+| Brainrots | 27 original (18 v1.0.2 + 9 new, one per tier Common–Secret); 15 grant companion abilities |
+| Regions | 9 — the original 7 zones + Abyssal Kingdom + Skyfall Kingdom (both functional: chests, hazards, checkpoint run, boss altar) |
+| Tide variants | 10 working (Standard, Fast, Toxic, Frozen, Meteor, Double, Dark, GiantBoss, Corrupted, Cosmic) |
+| Bosses | 3 — THE ALGORITHM + THE GLITCH COLOSSUS + THE VOID EMPEROR (all 3-phase) |
+| Quests | 54 (16 v1.0.2 + 38 new, incl. a 5-quest story chain) |
+| Achievements / titles | 24 achievements, 13 titles (new in v1.1) |
+| Playable powers | 17 (12 v1.0.2 + 5 new) + 27 character Q primaries |
 | Teams | Red Rotters vs Blue Brainrots (plus a FreeForAll mode) |
 | Data | DataStoreService — `GlitchTide_Data_v1` (+ leaderboard store `GlitchTide_Leaderboard_v1`) |
 | Starting cash | 100 coins |
@@ -88,10 +116,14 @@ every server.
   and turret positions. Your most valuable Brainrots belong furthest from the door.
 - **Spawn pads** — team spawn points (Red / Blue).
 
-## 4. The 18 Brainrots
+## 4. The 27 Brainrots
 
 Roster, rarity, and base income are defined in `src/shared/Characters.luau`.
 Income is coins per second at level 1, before multipliers.
+Rows 19–27 are new in v1.1 (one per tier, Common–Secret; the Wobble King
+stays the sole Impossible). 15 of the 27 grant a companion ability
+(income bonus, tide protection, rare-market detection, carry speed, raid
+detection, mutation bonus — capped per kind; see `src/shared/Companions.luau`).
 
 | # | Brainrot | Rarity | Cost | Income/s |
 |---|---|---|---|---:|
@@ -113,6 +145,15 @@ Income is coins per second at level 1, before multipliers.
 | 16 | Glitchy Goose | Celestial | 250,000 | 4,500 |
 | 17 | Caramel Crab | Secret | 500,000 | 9,000 |
 | 18 | The Wobble King | Impossible | 1,000,000 | 18,000 |
+| 19 | Phantom Pancake | Common | 250 | 7 |
+| 20 | Prism Penguin | Uncommon | 550 | 12 |
+| 21 | Neon Narwhal | Rare | 2,000 | 50 |
+| 22 | Reactor Raccoon | Epic | 7,000 | 130 |
+| 23 | Gravity Goblin | Legendary | 18,000 | 300 |
+| 24 | Thunder Tortoise | Mythic | 50,000 | 900 |
+| 25 | Quantum Quokka | Divine | 150,000 | 2,800 |
+| 26 | Solar Sloth | Celestial | 300,000 | 5,500 |
+| 27 | Void Vulture | Secret | 600,000 | 11,000 |
 
 Each Brainrot also has a defence trait (for example Sturdy, Swift, Armored,
 Spiky, FreezeAura, Alarm, RingGuard, Watchful) and a primary ability (§8).
@@ -159,13 +200,24 @@ The signature event, tuned in `Config.luau`:
 - Glitched Brainrots cost 1.5× their normal price and earn bonus income.
 - The Tide is the best time to buy high and the worst time to leave your
   base unguarded — everyone is rich, and everyone is a target.
-- **Playable variations** (one rolls each tide, `Config.TideVariations`):
+- **Playable variations** (one rolls each tide, `Config.TideVariations`,
+  weights sum to 100):
   **Standard** (no modifiers), **Fast** (speed ×1.5, rewards ×1.25),
   **Toxic** (damage ×1.25, rewards ×1.5), **Frozen** (movement ×0.7,
   rewards ×1.5), **Meteor** (meteor strikes, damage ×1.5, rewards
-  ×1.75). Each variation's behaviour lives in `TideService`.
-  **Double / Dark / GiantBoss exist only as data** in
-  `Config.TideVariationsDisabled` — they have no behaviour and never roll.
+  ×1.75), **Double** (two anti-phase wave walls, rewards ×2.0),
+  **Dark** (FogEnd 120, ambush spawns, rewards ×1.75),
+  **GiantBoss** (THE GLITCH COLOSSUS spawns mid-tide, rewards ×3.0),
+  **Corrupted** (glitch barriers teleport the exposed, rewards ×2.25),
+  **Cosmic** (gravity 196 → 60, starfall pickups, rewards ×2.5).
+  Each variation's behaviour lives in `TideService`; Double / Dark /
+  GiantBoss are no longer data-only — `Config.TideVariationsDisabled`
+  was deleted in v1.1. The tide now runs a 10-stage cinematic
+  anticipation (environment flicker → sirens → sky change → warning →
+  wave emerges → travels → survival → climax → rewards), with escape
+  routes broadcast, 3 temporary shelters, moving channel obstacles,
+  risk zones, tide surfing, co-op survival rewards, and a 10% secret
+  encounter roll per tide.
 - **Golden Hour** (rotating world event, `EventService`): 2× income for
   120 s. It stacks with the Tide multiplier (Tide 2× × Golden Hour 2× =
   4×) and is announced on the HUD event banner (`EventUpdate`); tide
@@ -462,18 +514,27 @@ is a failure to fix before publishing. See `GROK_BUILD_HANDOFF.md`.
 - **No Studio playtest has been run from this workspace.** Everything above
   describes the code and configuration as verified statically; behaviour
   in Studio is unverified until Grok Build runs the camera regression
-  test and the acceptance scenario.
+  test and the acceptance scenario — and re-runs them after the v1.1
+  overhaul (map, lighting, and character models all changed).
 - **DataStore needs API access enabled in Studio** (Game Settings → Security),
   otherwise saves fail in playtests. Live-game DataStores work without this
   setting; it is a Studio-only requirement.
 - **12 base plots, MaxPlayers 12** — one plot per player.
-- **Tide variations Double / Dark / GiantBoss are data-only** (in
-  `Config.TideVariationsDisabled`): no behaviour, never roll, must not be
-  offered in any UI.
 - **No trading system** (intentional, for safety).
 - **No offline income** — income only accrues while playing (banked income
   is collected via CollectIncome while in-game).
 - **No screenshots, recordings, or published game exist yet.**
+- **v1.1 known gaps** (see `QA_TEST_REPORT.md` §12): the Abyssal boss
+  altar summons THE ALGORITHM in the Chaos Arena, not an Abyssal-local
+  boss; dimension lighting moods do not auto-apply (Lighting is global);
+  territory bonuses are a flat tick, not an income multiplier; the hidden
+  merchant is a discovery trigger, not a shop; expedition
+  on-expedition instances are hidden by the UI but not blocked by
+  Base/Mutation/Fusion services; mastery is shown from session counts
+  (no server push); 5 sound slots are unassigned by design;
+  `UsePower` / `SettingsUpdate` / `SynergyUpdate` stay unwired by
+  documented decision; controller input is not bound; animation is
+  procedural, not keyframed.
 
 ## 16. Sources consulted (research for this document)
 

@@ -5,11 +5,14 @@
 -- swatch, name, rarity, income, trait, description). Undiscovered =
 -- silhouette "???" card with a hint (rarity + cost + income band).
 -- Discovery is real data, not guesswork: a Brainrot counts as discovered
--- when the server's shop list says you own it (RequestShop Owned flags)
--- or it is your currently equipped character. Without a server reply,
--- only the equipped starter is discovered and the rest are silhouettes.
--- Milestone text at the top shows X / 18 discovered. Toggle: L key, or
--- the "COLLECTION" button on the HUD menu bar / main menu.
+-- when the server's collection list says so (RequestCollection returns
+-- {Discovered, Total, Owned, ByRarity} — ProgressionService.GetCollection),
+-- with the RequestShop Owned flags as a fallback merge. Without a server
+-- reply, only the equipped starter is discovered and the rest are
+-- silhouettes.
+-- Milestone text at the top shows X / 27 discovered (the roster grew
+-- 18 → 27 in v1.1 Wave 1). Toggle: L key, or the "COLLECTION" button
+-- on the HUD menu bar / main menu.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -244,6 +247,34 @@ function CollectionController.RefreshFromServer()
 			end
 		end
 	end)
+	-- RequestCollection (v1.1 E, audit F1): the server handler existed
+	-- (ProgressionService.GetCollection) but NO client ever called it.
+	-- It returns {Discovered, Total, Owned, ByRarity}; Discovered is
+	-- the authoritative id list. RequestShop Owned flags are merged
+	-- as a fallback so a collection reply that lags still shows owned
+	-- Brainrots.
+	local collectionFn = getRemote(remoteName("RequestCollection", "RequestCollection"))
+	if collectionFn and collectionFn:IsA("RemoteFunction") then
+		task.spawn(function()
+			local ok, result = pcall(function()
+				return (collectionFn :: RemoteFunction):InvokeServer()
+			end)
+			if ok and typeof(result) == "table" then
+				local list = result.Discovered or result.discovered
+				if typeof(list) == "table" then
+					for _, id in list do
+						if typeof(id) == "string" then
+							discovered[id] = true
+						end
+					end
+				end
+				if typeof(result.Total) == "number" and result.Total > 0 then
+					totalCount = result.Total
+				end
+				CollectionController.Rebuild()
+			end
+		end)
+	end
 	local shopFn = getRemote(remoteName("RequestShop", "RequestShop"))
 	if shopFn and shopFn:IsA("RemoteFunction") then
 		task.spawn(function()

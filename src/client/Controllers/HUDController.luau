@@ -9,6 +9,13 @@
 -- Shop / Brainrots / Base / Quests / Collection) that opens the other
 -- controllers. Menu buttons lazy-require their controller on click, so
 -- the HUD never hard-depends on another controller's Init order.
+-- Wave 3 (v1.1 E) added: a second menu row for the new panels (Lab /
+-- Expeditions / Territory / Worlds / Achievements), the BossUpdate
+-- health bar, the 10-stage tide line, the equipped-title slot, death
+-- and victory screens, the welcome banner, the EventUpdate SoundHook
+-- sounds, and the RequestEvents active-event fetch (60s). The dead
+-- FireServer("GetStats") and the 5s stats polling fallback were
+-- removed — PlayerStats is a server-pushed event.
 -- Returns a table with Init() plus public Update* / FlashDamage helpers
 -- so other controllers (e.g. AbilityController) can flash the vignette.
 -- Rarity colours live in RarityColors.luau (required for the chips).
@@ -82,6 +89,18 @@ local baseChip = nil
 local baseLabel = nil
 local questTracker = nil
 local questLabel = nil
+-- Wave 3 (v1.1 E): boss health bar, tide stage line, equipped title,
+-- death / victory screens, welcome banner.
+local bossBarFrame = nil
+local bossFill = nil
+local bossLabel = nil
+local stageFrame = nil
+local stageLabel = nil
+local titleLabel = nil
+local deathScreen = nil
+local victoryScreen = nil
+local victoryLabel = nil
+local welcomeShown = false
 
 local maxHealth = 100
 local currentHealth = 100
@@ -335,6 +354,111 @@ function HUDController.SetTide(phase, secondsLeft)
 	tideBanner.BackgroundColor3 = color
 end
 
+-- Boss health bar (v1.1 E, Workstream D's BossUpdate remote).
+-- BossUpdate is fired by BossService on spawn / phase change / every
+-- 2s while the boss is alive / death: {Event, BossId, BossName, Arena,
+-- Active, Health, MaxHealth, Phase}. Event "BossSpawned" shows the bar,
+-- "BossDied" hides it after a short beat; Active=false hides it.
+function HUDController.SetBoss(bossName, health, maxHealth, phase)
+	if not bossBarFrame or not bossFill or not bossLabel then
+		return
+	end
+	if bossName == nil or bossName == "" then
+		bossBarFrame.Visible = false
+		return
+	end
+	bossBarFrame.Visible = true
+	local h = math.max(0, health or 0)
+	local m = math.max(1, maxHealth or 1)
+	bossFill.Size = UDim2.new(math.clamp(h / m, 0, 1), 0, 1, 0)
+	local phaseText = if typeof(phase) == "string" and phase ~= "" then "  •  " .. phase else ""
+	bossLabel.Text = "👹 " .. tostring(bossName) .. "   " .. tostring(math.floor(h)) .. " / " .. tostring(math.floor(m)) .. phaseText
+end
+
+-- Tide stage line (v1.1 E, Workstream D's 10-stage anticipation):
+-- "Stage 3/10 — The sky glitches" under the tide banner. The
+-- announcement text is shown in the event banner for a few seconds.
+function HUDController.SetTideStage(stage, stageName, announcement)
+	if not stageFrame or not stageLabel then
+		return
+	end
+	if typeof(stage) ~= "number" or stage <= 0 then
+		stageFrame.Visible = false
+		return
+	end
+	stageFrame.Visible = true
+	local name = if typeof(stageName) == "string" and stageName ~= "" then " — " .. stageName else ""
+	stageLabel.Text = "Stage " .. tostring(stage) .. "/10" .. name
+	if typeof(announcement) == "string" and announcement ~= "" then
+		HUDController.ShowEventBanner("📣 " .. announcement, 6)
+	end
+end
+
+-- Equipped title (v1.1 E): shown under the team line. Set by
+-- AchievementController (local-only until the EquipTitle server
+-- handler is wired — see docs/QA_V11_E.md).
+function HUDController.SetEquippedTitle(titleId)
+	if not titleLabel then
+		return
+	end
+	if typeof(titleId) == "string" and titleId ~= "" then
+		titleLabel.Text = "🏆 " .. titleId
+		titleLabel.Visible = true
+	else
+		titleLabel.Visible = false
+	end
+end
+
+-- Generic banner used by PanelKit.ShowBanner (shared banner helper).
+-- Reuses the event banner slot so there is exactly one banner queue.
+function HUDController.ShowBanner(text, durationSeconds)
+	HUDController.ShowEventBanner(text, durationSeconds or 6)
+end
+
+-- Death screen (v1.1 E): shown when the local Humanoid dies; hidden
+-- when the new character binds (respawn).
+function HUDController.ShowDeathScreen()
+	if not deathScreen then
+		return
+	end
+	deathScreen.Visible = true
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("SoundController")
+		if mod then
+			local sound = require(mod)
+			if sound.PlayDefeat then
+				sound.PlayDefeat()
+			end
+		end
+	end)
+end
+
+-- Victory screen (v1.1 E): the local player survived a tide.
+function HUDController.ShowVictoryScreen(variation, rewardMultiplier)
+	if not victoryScreen or not victoryLabel then
+		return
+	end
+	local multText = if typeof(rewardMultiplier) == "number" and rewardMultiplier > 1
+		then "\nReward ×" .. tostring(rewardMultiplier)
+		else ""
+	victoryLabel.Text = "🌊 YOU SURVIVED THE " .. string.upper(tostring(variation or "GLITCH TIDE")) .. "!" .. multText
+	victoryScreen.Visible = true
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("SoundController")
+		if mod then
+			local sound = require(mod)
+			if sound.PlayVictory then
+				sound.PlayVictory()
+			end
+		end
+	end)
+	task.delay(6, function()
+		if victoryScreen then
+			victoryScreen.Visible = false
+		end
+	end)
+end
+
 -- One-line event banner under the tide banner (e.g. double-income
 -- weekends, bonus conveyor hours). Pass nil/"" to hide.
 function HUDController.ShowEventBanner(text, durationSeconds)
@@ -547,12 +671,23 @@ end
 
 -- GlitchTideUpdate payload: {Phase=..., TimeLeft=...} / {phase,
 -- secondsRemaining} / (phaseString, seconds) — all accepted.
+-- Wave 3 (v1.1 E, D's new fields): Stage (1-10), StageName,
+-- Announcement, EscapeRoutes (stage 5 only), WavePosition, CoopBonus,
+-- Survivors, RewardMultiplier. The stage line and announcement are
+-- surfaced; EscapeRoutes are drawn by the client map markers, not the
+-- HUD (no map-marker API exists on the client yet — see QA_V11_E.md).
 local function applyTideUpdate(a, b)
 	local phase: string? = nil
 	local seconds: number? = nil
+	local stage: number? = nil
+	local stageName: string? = nil
+	local announcement: string? = nil
 	if typeof(a) == "table" then
 		phase = a.Phase or a.phase
 		seconds = a.TimeLeft or a.timeLeft or a.SecondsLeft or a.secondsRemaining
+		stage = a.Stage
+		stageName = a.StageName
+		announcement = a.Announcement
 	elseif typeof(a) == "string" then
 		phase = a
 		if typeof(b) == "number" then
@@ -561,6 +696,9 @@ local function applyTideUpdate(a, b)
 	end
 	if phase then
 		HUDController.SetTide(phase, seconds)
+	end
+	if stage ~= nil then
+		HUDController.SetTideStage(stage, stageName, announcement)
 	end
 end
 
@@ -618,11 +756,20 @@ local function bindHumanoid(humanoid)
 			HUDController.FlashDamage(math.clamp(lost / math.max(1, maxHealth) * 2.2, 0.25, 1))
 		end
 	end)
+	-- Death screen (v1.1 E): the Humanoid fires Died once per life;
+	-- the screen hides when the next character binds (respawn).
+	humanoid.Died:Connect(function()
+		HUDController.ShowDeathScreen()
+	end)
 end
 
 local function bindCharacter(character)
 	if not character then
 		return
+	end
+	-- Respawn: hide the death screen from the previous life.
+	if deathScreen then
+		deathScreen.Visible = false
 	end
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -775,11 +922,25 @@ local function build()
 	tideLabel.Position = UDim2.new(0, 8, 0, 0)
 	tideLabel.TextXAlignment = Enum.TextXAlignment.Center
 
-	-- ---- Event banner (under the tide banner) -----------------------------
+	-- ---- Tide stage line (under the tide banner, v1.1 E) ---------------
+	stageFrame = Instance.new("Frame")
+	stageFrame.Name = "TideStage"
+	stageFrame.Size = UDim2.new(0, 320, 0, 18)
+	stageFrame.Position = UDim2.new(0.5, -160, 0, 142)
+	stageFrame.BackgroundTransparency = 1
+	stageFrame.BorderSizePixel = 0
+	stageFrame.Visible = false
+	stageFrame.Parent = gui
+	stageLabel = makeLabel(stageFrame, "", 11, Color3.fromRGB(220, 180, 255), true)
+	stageLabel.Size = UDim2.new(1, 0, 1, 0)
+	stageLabel.Position = UDim2.new(0, 0, 0, 0)
+	stageLabel.TextXAlignment = Enum.TextXAlignment.Center
+
+	-- ---- Event banner (under the stage line) ----------------------------
 	local eventFrame = Instance.new("Frame")
 	eventFrame.Name = "EventBanner"
 	eventFrame.Size = UDim2.new(0, 320, 0, 26)
-	eventFrame.Position = UDim2.new(0.5, -160, 0, 146)
+	eventFrame.Position = UDim2.new(0.5, -160, 0, 164)
 	eventFrame.BackgroundColor3 = Color3.fromRGB(30, 90, 140)
 	eventFrame.BorderSizePixel = 0
 	eventFrame.Visible = false
@@ -790,10 +951,40 @@ local function build()
 	eventLabel.Position = UDim2.new(0, 8, 0, 0)
 	eventLabel.TextXAlignment = Enum.TextXAlignment.Center
 
+	-- ---- Boss health bar (under the event banner, v1.1 E) --------------
+	bossBarFrame = Instance.new("Frame")
+	bossBarFrame.Name = "BossBar"
+	bossBarFrame.Size = UDim2.new(0, 340, 0, 26)
+	bossBarFrame.Position = UDim2.new(0.5, -170, 0, 198)
+	bossBarFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+	bossBarFrame.BackgroundTransparency = 0.25
+	bossBarFrame.BorderSizePixel = 0
+	bossBarFrame.Visible = false
+	bossBarFrame.Parent = gui
+	corner(bossBarFrame, 8)
+	stroke(bossBarFrame, Color3.fromRGB(255, 60, 60), 1).Transparency = 0.5
+	local bossFillBg = Instance.new("Frame")
+	bossFillBg.Size = UDim2.new(1, -8, 0, 8)
+	bossFillBg.Position = UDim2.new(0, 4, 1, -12)
+	bossFillBg.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+	bossFillBg.BorderSizePixel = 0
+	bossFillBg.Parent = bossBarFrame
+	corner(bossFillBg, 4)
+	bossFill = Instance.new("Frame")
+	bossFill.Size = UDim2.new(1, 0, 1, 0)
+	bossFill.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+	bossFill.BorderSizePixel = 0
+	bossFill.Parent = bossFillBg
+	corner(bossFill, 4)
+	bossLabel = makeLabel(bossBarFrame, "", 12, Color3.fromRGB(255, 255, 255), true)
+	bossLabel.Size = UDim2.new(1, -16, 0, 14)
+	bossLabel.Position = UDim2.new(0, 8, 0, 0)
+	bossLabel.TextXAlignment = Enum.TextXAlignment.Center
+
 	-- ---- Top-right: coins, gems, shards, income, KOs, players, team -----
 	local rightPanel = Instance.new("Frame")
 	rightPanel.Name = "RightPanel"
-	rightPanel.Size = UDim2.new(0, 220, 0, 150)
+	rightPanel.Size = UDim2.new(0, 220, 0, 164)
 	rightPanel.Position = UDim2.new(1, -234, 0, 14)
 	rightPanel.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
 	rightPanel.BackgroundTransparency = 0.25
@@ -834,7 +1025,12 @@ local function build()
 
 	local rarityHint = makeLabel(rightPanel, "Rarity colours: see shop cards", 10, Color3.fromRGB(150, 150, 170), false)
 	rarityHint.Size = UDim2.new(1, -20, 0, 16)
-	rarityHint.Position = UDim2.new(0, 10, 0, 124)
+	rarityHint.Position = UDim2.new(0, 10, 0, 140)
+	-- Equipped title (v1.1 E): set by AchievementController.
+	titleLabel = makeLabel(rightPanel, "", 12, Color3.fromRGB(255, 215, 0), true)
+	titleLabel.Size = UDim2.new(1, -20, 0, 16)
+	titleLabel.Position = UDim2.new(0, 10, 0, 122)
+	titleLabel.Visible = false
 	-- Keep the RarityColors module referenced so the shared palette is
 	-- loaded with the HUD (other controllers require it directly too).
 	_ = RarityColors.Get("Legendary")
@@ -928,11 +1124,86 @@ local function build()
 		end)
 	end
 
+	-- ---- Second menu row (v1.1 E): the new Wave 1+2 panels ------------
+	-- LAB / EXPEDITIONS / TERRITORY / WORLDS / ACHIEVEMENTS open the
+	-- new Wave 3 controllers through the same lazy openController.
+	local menuBar2 = Instance.new("Frame")
+	menuBar2.Name = "MenuBar2"
+	menuBar2.AnchorPoint = Vector2.new(0.5, 1)
+	menuBar2.Position = UDim2.new(0.5, 0, 1, -58)
+	menuBar2.Size = UDim2.new(0, 440, 0, 38)
+	menuBar2.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+	menuBar2.BackgroundTransparency = 0.25
+	menuBar2.BorderSizePixel = 0
+	menuBar2.Parent = gui
+	corner(menuBar2, 10)
+	stroke(menuBar2, Color3.fromRGB(120, 80, 255), 1).Transparency = 0.8
+	local menuButtons2 = {
+		{ text = "LAB", module = "LaboratoryController" },
+		{ text = "EXPEDITIONS", module = "ExpeditionController" },
+		{ text = "TERRITORY", module = "TerritoryController" },
+		{ text = "WORLDS", module = "DimensionController" },
+		{ text = "ACHIEVEMENTS", module = "AchievementController" },
+	}
+	for i, entry in menuButtons2 do
+		local btn = Instance.new("TextButton")
+		btn.Name = "Menu2_" .. entry.module
+		btn.Size = UDim2.new(0, 82, 0, 28)
+		btn.Position = UDim2.new(0, 6 + (i - 1) * 87, 0, 5)
+		btn.Text = entry.text
+		btn.Font = Enum.Font.GothamBold
+		btn.TextSize = if isTouch then 10 else 11
+		btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		btn.BackgroundColor3 = Color3.fromRGB(90, 70, 160)
+		btn.BorderSizePixel = 0
+		corner(btn, 8)
+		btn.Parent = menuBar2
+		btn.MouseButton1Click:Connect(function()
+			openController(entry.module)
+		end)
+	end
+
+	-- ---- Death / victory screens (v1.1 E) -------------------------------
+	deathScreen = Instance.new("Frame")
+	deathScreen.Name = "DeathScreen"
+	deathScreen.Size = UDim2.new(1, 0, 1, 0)
+	deathScreen.BackgroundColor3 = Color3.fromRGB(20, 0, 0)
+	deathScreen.BackgroundTransparency = 0.4
+	deathScreen.BorderSizePixel = 0
+	deathScreen.Visible = false
+	deathScreen.ZIndex = 40
+	deathScreen.Parent = gui
+	local deathLabel = makeLabel(deathScreen, "💀 YOU DIED", 40, Color3.fromRGB(255, 80, 80), true)
+	deathLabel.Size = UDim2.new(1, 0, 0, 60)
+	deathLabel.Position = UDim2.new(0, 0, 0.4, -30)
+	deathLabel.TextXAlignment = Enum.TextXAlignment.Center
+	deathLabel.ZIndex = 41
+	local deathSub = makeLabel(deathScreen, "Respawning… your Brainrots keep earning while you're away.", 14, Color3.fromRGB(255, 220, 220), false)
+	deathSub.Size = UDim2.new(1, 0, 0, 22)
+	deathSub.Position = UDim2.new(0, 0, 0.4, 34)
+	deathSub.TextXAlignment = Enum.TextXAlignment.Center
+	deathSub.ZIndex = 41
+
+	victoryScreen = Instance.new("Frame")
+	victoryScreen.Name = "VictoryScreen"
+	victoryScreen.Size = UDim2.new(1, 0, 1, 0)
+	victoryScreen.BackgroundColor3 = Color3.fromRGB(0, 30, 10)
+	victoryScreen.BackgroundTransparency = 0.4
+	victoryScreen.BorderSizePixel = 0
+	victoryScreen.Visible = false
+	victoryScreen.ZIndex = 40
+	victoryScreen.Parent = gui
+	victoryLabel = makeLabel(victoryScreen, "", 32, Color3.fromRGB(120, 255, 120), true)
+	victoryLabel.Size = UDim2.new(1, 0, 0, 60)
+	victoryLabel.Position = UDim2.new(0, 0, 0.4, -30)
+	victoryLabel.TextXAlignment = Enum.TextXAlignment.Center
+	victoryLabel.ZIndex = 41
+
 	-- Mobile compact layout: narrower side panels so nothing overlaps.
 	if isTouch then
 		leftPanel.Size = UDim2.new(0, 210, 0, 86)
 		questTracker.Size = UDim2.new(0, 210, 0, 30)
-		rightPanel.Size = UDim2.new(0, 190, 0, 150)
+		rightPanel.Size = UDim2.new(0, 190, 0, 164)
 		rightPanel.Position = UDim2.new(1, -204, 0, 14)
 		centerPanel.Size = UDim2.new(0, 190, 0, 84)
 		centerPanel.Position = UDim2.new(0.5, -95, 0, 14)
@@ -1004,32 +1275,32 @@ function HUDController.Init()
 		end)
 
 		-- Player stats: coins / gems / shards / XP / level / KOs / team.
-		-- PlayerStats is a RemoteEvent in Remotes.luau; the RemoteFunction
-		-- branch below is kept only as a defensive fallback.
+		-- PlayerStats is a RemoteEvent in Remotes.luau and the server
+		-- pushes it on join and on every change. WAVE 3 (v1.1 E)
+		-- removed the old RemoteFunction branch: it polled InvokeServer
+		-- every 5s on a remote that has no function handler — dead
+		-- traffic (optimization note, QA_V11_E.md §15).
 		local statsRemote = remotes:FindFirstChild("PlayerStats")
 		if statsRemote and statsRemote:IsA("RemoteEvent") then
 			(statsRemote :: RemoteEvent).OnClientEvent:Connect(applyPlayerStats)
-		elseif statsRemote and statsRemote:IsA("RemoteFunction") then
-			task.spawn(function()
-				while true do
-					task.wait(5)
-					local ok, data = pcall(function()
-						return (statsRemote :: RemoteFunction):InvokeServer("GetStats")
-					end)
-					if ok and typeof(data) == "table" then
-						applyPlayerStats(data)
-					end
-				end
-			end)
 		end
 
 		-- Damage numbers landing on this player also flash the vignette lightly,
 		-- in case a hit does not go through the Humanoid (e.g. shielded damage).
+		-- Wave 3 (v1.1 E): the server fires a TABLE {target, amount, isCrit,
+		-- isHeal} (CombatService) — the old positional (targetPlayer, amount)
+		-- form never matched it, so the flash never fired.
 		local damageRemote = remotes:FindFirstChild("DamageNumber")
 		if damageRemote and damageRemote:IsA("RemoteEvent") then
 			(damageRemote :: RemoteEvent).OnClientEvent:Connect(function(target, amount)
-				if target == LocalPlayer and typeof(amount) == "number" then
-					HUDController.FlashDamage(math.clamp(amount / 50, 0.2, 0.8))
+				local amt: number? = nil
+				if typeof(target) == "table" then
+					amt = tonumber(target.amount)
+				elseif target == LocalPlayer and typeof(amount) == "number" then
+					amt = amount
+				end
+				if amt ~= nil then
+					HUDController.FlashDamage(math.clamp(amt / 50, 0.2, 0.8))
 				end
 			end)
 		end
@@ -1047,6 +1318,8 @@ function HUDController.Init()
 		-- World-event banner (v1.0.1 integration QA — EventService fired
 		-- EventUpdate but NO client listened, so Golden Hour etc. ran
 		-- silently). ShowEventBanner already existed; nothing called it.
+		-- Wave 3 (v1.1 E, B): the rare-acquisition banner carries an
+		-- extra SoundHook field ("rare" / "secret") — play it here.
 		task.spawn(function()
 			local ok, eventRemote = pcall(function()
 				return remotes:WaitForChild("EventUpdate", 30)
@@ -1072,7 +1345,92 @@ function HUDController.Init()
 					end
 					local duration = payload.Duration
 					HUDController.ShowEventBanner(text, if typeof(duration) == "number" and duration > 0 then duration else 8)
+					local hook = payload.SoundHook
+					if hook == "rare" or hook == "secret" then
+						pcall(function()
+							local mod = script.Parent:FindFirstChild("SoundController")
+							if mod then
+								local sound = require(mod)
+								if sound.PlaySoundHook then
+									sound.PlaySoundHook(hook)
+								end
+							end
+						end)
+					end
 				end)
+			end
+		end)
+
+		-- Boss health bar (v1.1 E, Workstream D): BossService fires
+		-- BossUpdate on spawn / phase change / every 2s / death:
+		-- {Event, BossId, BossName, Arena, Active, Health, MaxHealth,
+		-- Phase}. Event "BossSpawned" shows the bar, "BossDied" hides
+		-- it after a beat; Active=false hides it.
+		task.spawn(function()
+			local ok, bossRemote = pcall(function()
+				return remotes:WaitForChild("BossUpdate", 30)
+			end)
+			if ok and bossRemote and bossRemote:IsA("RemoteEvent") then
+				(bossRemote :: RemoteEvent).OnClientEvent:Connect(function(payload: any)
+					if typeof(payload) ~= "table" then
+						return
+					end
+					local event = tostring(payload.Event or "")
+					local active = payload.Active ~= false
+					if event == "BossDied" or not active then
+						HUDController.SetBoss("", 0, 1)
+						if event == "BossDied" then
+							HUDController.ShowEventBanner("👹 " .. tostring(payload.BossName or "Boss") .. " defeated!", 8)
+							pcall(function()
+								local mod = script.Parent:FindFirstChild("SoundController")
+								if mod then
+									local sound = require(mod)
+									if sound.PlayVictory then
+										sound.PlayVictory()
+									end
+								end
+							end)
+						end
+						return
+					end
+					HUDController.SetBoss(payload.BossName, payload.Health, payload.MaxHealth, payload.Phase)
+					if event == "BossSpawned" then
+						HUDController.ShowEventBanner("👹 BOSS: " .. tostring(payload.BossName or "?") .. " appeared in " .. tostring(payload.Arena or "the arena") .. "!", 8)
+						pcall(function()
+							local mod = script.Parent:FindFirstChild("SoundController")
+							if mod then
+								local sound = require(mod)
+								if sound.PlayBoss then
+									sound.PlayBoss()
+								end
+							end
+						end)
+					end
+				end)
+			end
+		end)
+
+		-- Active event on join + slow refresh (v1.1 E): the server's
+		-- RequestEvents function returns GetActiveEvent() {Id, Name,
+		-- EndsIn}; the HUD shows it so a player who joins mid-event
+		-- sees it. 60s cadence — this is state, not a hot path.
+		task.spawn(function()
+			local requestEvents = remotes:FindFirstChild("RequestEvents")
+			if not requestEvents or not requestEvents:IsA("RemoteFunction") then
+				return
+			end
+			while gui do
+				local ok, result = pcall(function()
+					return (requestEvents :: RemoteFunction):InvokeServer()
+				end)
+				if ok and typeof(result) == "table" and typeof(result.Name) == "string" and result.Name ~= "" then
+					local endsIn = result.EndsIn
+					local suffix = if typeof(endsIn) == "number" and endsIn > 0
+						then "  •  ends in " .. tostring(math.floor(endsIn / 60)) .. "m"
+						else ""
+					HUDController.ShowEventBanner("✨ Active event: " .. result.Name .. suffix, 10)
+				end
+				task.wait(60)
 			end
 		end)
 
@@ -1107,6 +1465,7 @@ function HUDController.Init()
 						else ""
 					if survived then
 						HUDController.ShowEventBanner("🌊 You survived the " .. variation .. " tide!" .. multText, 8)
+						HUDController.ShowVictoryScreen(variation, mult)
 					elseif count > 0 then
 						HUDController.ShowEventBanner("🌊 " .. variation .. " tide ended — " .. tostring(count) .. " survivor" .. (if count == 1 then "" else "s") .. "." .. multText, 8)
 					else
@@ -1136,16 +1495,12 @@ function HUDController.Init()
 			end
 		end)
 
-		-- Ask the server for the current stats snapshot (only if
-		-- PlayerStats is an event; a function is polled above instead).
-		if statsRemote and statsRemote:IsA("RemoteEvent") then
-			task.spawn(function()
-				task.wait(0.5)
-				pcall(function()
-					(statsRemote :: RemoteEvent):FireServer("GetStats")
-				end)
-			end)
-		end
+		-- Ask the server for the current stats snapshot.
+		-- WAVE 3 (v1.1 E) FIX: the old code fired PlayerStats with
+		-- "GetStats" — PlayerStats is a RemoteEvent with NO server
+		-- handler, so the fire was dead (audit F1). The server pushes
+		-- PlayerStats itself on join and on every change; nothing
+		-- needs to be asked for. Removed, not replaced.
 	end
 
 	-- Character / Humanoid binding, including respawns.
@@ -1165,6 +1520,13 @@ function HUDController.Init()
 	HUDController.SetTimer(0, "Waiting")
 	HUDController.SetWave(1)
 	HUDController.RefreshQuestTracker()
+
+	-- Welcome banner on first open (v1.1 E onboarding): one line that
+	-- tells a new player what to do first.
+	if not welcomeShown then
+		welcomeShown = true
+		HUDController.ShowEventBanner("👋 Welcome to GLITCH TIDE! Buy Brainrots on the conveyor, place them in your base, and check 📜 Quests for your first goal.", 12)
+	end
 
 	print("[GlitchTide] HUDController ready")
 end

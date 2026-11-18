@@ -957,6 +957,26 @@ function RaidService.StealBrainrot(thief: Player, victimUserId: any, instanceId:
 	local anchorPos = anchor or getBasePosition(victim) or getCharacterPosition(victim) or thiefPos
 	_pairCooldowns[pairKey] = os.clock()
 	alertSteal(victim, thief, placed.CharacterId, "Started")
+	-- v1.1 companion RaidDetection: the victim's companions add lead
+	-- time to the steal channel (GetRaidWarningSeconds, max +7.5s), so
+	-- the victim has longer between the alert and the theft completing.
+	local channelSeconds = STEAL_CHANNEL
+	do
+		local ok, extra = pcall(function()
+			local mod = script.Parent:FindFirstChild("CompanionService")
+			if not mod then
+				return 0
+			end
+			local svc = require(mod)
+			if type(svc.GetRaidWarningSeconds) ~= "function" then
+				return 0
+			end
+			return svc.GetRaidWarningSeconds(victim)
+		end)
+		if ok and type(extra) == "number" then
+			channelSeconds = STEAL_CHANNEL + math.clamp(extra, 0, 7.5)
+		end
+	end
 	local channel = {
 		Thief = thief,
 		Victim = victim,
@@ -969,7 +989,7 @@ function RaidService.StealBrainrot(thief: Player, victimUserId: any, instanceId:
 	_channels[thief] = channel
 	local channelOk = true
 	local waited = 0
-	while waited < STEAL_CHANNEL do
+	while waited < channelSeconds do
 		task.wait(0.1)
 		waited += 0.1
 		if channel.Cancelled or _channels[thief] ~= channel then

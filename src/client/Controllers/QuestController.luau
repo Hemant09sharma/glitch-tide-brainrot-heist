@@ -26,6 +26,11 @@ local statusLabel: TextLabel? = nil
 local isOpen = false
 local quests: { any } = {}
 local liveMode = false
+-- Claim debounce (v1.1 E, Part 13 duplicate prevention): the server
+-- pays a claim once, but a double-click used to fire ClaimQuest twice
+-- before the refresh landed. Last claim time per quest id; repeats
+-- inside 2s are ignored client-side.
+local claimCooldowns: { [string]: number } = {}
 
 -- Local preview line, shown ONLY while the server has no quest system.
 -- Labelled "coming soon" so it is never mistaken for live progress.
@@ -189,8 +194,26 @@ function QuestController.Rebuild()
 		note.Position = UDim2.new(0, 8, 0, 8)
 		return
 	end
+	-- Grouped by Category (v1.1 E): story / daily / weekly / expedition
+	-- / territory / secret / … in first-seen order, with a header per
+	-- group so a 54-quest list stays scannable.
+	local categories: { string } = {}
+	local byCategory: { [string]: { any } } = {}
 	for _, q in source do
-		buildRow(q).Parent = listFrame
+		local category = tostring(q.Category or q.category or "general")
+		if byCategory[category] == nil then
+			byCategory[category] = {}
+			table.insert(categories, category)
+		end
+		table.insert(byCategory[category], q)
+	end
+	for _, category in categories do
+		local header = makeLabel(listFrame, "— " .. string.upper(category) .. " —", 13, Color3.fromRGB(255, 215, 0), true)
+		header.Size = UDim2.new(1, -16, 0, 20)
+		header.Position = UDim2.new(0, 8, 0, 8)
+		for _, q in byCategory[category] do
+			buildRow(q).Parent = listFrame
+		end
 	end
 end
 
@@ -241,6 +264,12 @@ function QuestController.Claim(questId: any)
 		setStatus("ClaimQuest remote is not available yet.", true)
 		return
 	end
+	local id = tostring(questId or "")
+	local now = os.clock()
+	if now - (claimCooldowns[id] or 0) < 2 then
+		return -- double-click guard: the claim is already in flight
+	end
+	claimCooldowns[id] = now
 	setStatus("Claiming reward — waiting for the server…")
 	pcall(function()
 		(remote :: RemoteEvent):FireServer(questId)
@@ -256,11 +285,11 @@ function QuestController.Refresh()
 		return
 	end
 	local requestRemote = folder:FindFirstChild("RequestQuests")
-	if requestRemote and requestRemote:IsA("RemoteEvent") then
-		pcall(function()
-			(requestRemote :: RemoteEvent):FireServer()
-		end)
-	elseif requestRemote and requestRemote:IsA("RemoteFunction") then
+	-- WAVE 3 (v1.1 E) FIX: the old first branch fired RequestQuests
+	-- as a RemoteEvent — RequestQuests is a RemoteFunction and has no
+	-- event handler, so that fire was dead (audit F1). Only the
+	-- function branch remains.
+	if requestRemote and requestRemote:IsA("RemoteFunction") then
 		task.spawn(function()
 			local ok, result = pcall(function()
 				return (requestRemote :: RemoteFunction):InvokeServer()

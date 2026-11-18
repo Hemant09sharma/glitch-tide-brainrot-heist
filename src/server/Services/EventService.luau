@@ -535,6 +535,15 @@ function EventService.RunEvent(def: EventDef)
 	_lastEventId = def.Id
 	print(string.format("[EventService] Event started: %s (%ds)", def.Name, def.Duration))
 	announce(def.Id, def.Name, "Started", def.Duration)
+	-- v1.1 (Workstream C): quest-progress hook — every online player
+	-- takes part in the event when it starts.
+	if _questService and type(_questService.ReportProgress) == "function" then
+		for _, player in ipairs(Players:GetPlayers()) do
+			pcall(function()
+				_questService.ReportProgress(player, "event", "participate", 1)
+			end)
+		end
+	end
 	local ok, err = pcall(function()
 		def.Start()
 	end)

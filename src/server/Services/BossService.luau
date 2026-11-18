@@ -771,6 +771,12 @@ local function onBossDeath()
 			))
 		end
 	end
+	-- v1.1 (Workstream C): quest-progress hook — top damager.
+	if top ~= nil and _questService and type(_questService.ReportProgress) == "function" then
+		pcall(function()
+			_questService.ReportProgress(top, "boss_top_damage", "top", 1)
+		end)
+	end
 	-- Every participant: tokens + coins + shards, boss quest event.
 	for player, damage in pairs(_damageDealt) do
 		if damage > 0 and player.Parent and _dataService then
@@ -794,6 +800,13 @@ local function onBossDeath()
 						_questService.RecordEvent(player, def.QuestEvent, 1)
 					end)
 				end
+			end
+			-- v1.1 (Workstream C): quest-progress hook — taking part
+			-- in a boss fight (separate from defeating it).
+			if _questService and type(_questService.ReportProgress) == "function" then
+				pcall(function()
+					_questService.ReportProgress(player, "boss_participated", "participate", 1)
+				end)
 			end
 		end
 	end

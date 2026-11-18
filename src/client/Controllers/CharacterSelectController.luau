@@ -220,7 +220,7 @@ end
 local function buildCard(def: any): Frame
 	local card = Instance.new("Frame")
 	card.Name = "Card_" .. tostring(def.Id)
-	card.Size = UDim2.new(0, 168, 0, 196)
+	card.Size = UDim2.new(0, 168, 0, 214)
 	card.BackgroundColor3 = Color3.fromRGB(28, 26, 48)
 	card.BorderSizePixel = 0
 	corner(card, 10)
@@ -272,10 +272,24 @@ local function buildCard(def: any): Frame
 	traitLabel.Size = UDim2.new(1, -16, 0, 16)
 	traitLabel.Position = UDim2.new(0, 8, 0, 132)
 
+	-- Companion ability (v1.1 E, Workstream B): the passive this
+	-- Brainrot grants while it follows you. The def is
+	-- {Kind, Value} — e.g. IncomeBonus 0.05 → "IncomeBonus +5%".
+	local companionText = "Companion: —"
+	local companion = def.CompanionAbility
+	if typeof(companion) == "table" then
+		local kind = tostring(companion.Kind or "?")
+		local value = tonumber(companion.Value) or 0
+		companionText = "Companion: " .. kind .. " +" .. tostring(math.floor(value * 100 + 0.5)) .. "%"
+	end
+	local companionLabel = makeLabel(card, companionText, 10, Color3.fromRGB(120, 220, 255), true)
+	companionLabel.Size = UDim2.new(1, -16, 0, 16)
+	companionLabel.Position = UDim2.new(0, 8, 0, 148)
+
 	local isOwned = owned[def.Id] == true or (def.Cost or 0) == 0
 	local button = Instance.new("TextButton")
 	button.Size = UDim2.new(1, -16, 0, 30)
-	button.Position = UDim2.new(0, 8, 0, 156)
+	button.Position = UDim2.new(0, 8, 0, 174)
 	button.Font = Enum.Font.GothamBold
 	button.TextSize = 13
 	button.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -431,7 +445,7 @@ function CharacterSelectController.Init()
 	grid.CanvasSize = UDim2.new(0, 0, 0, 0)
 	grid.Parent = panel
 	local gridLayout = Instance.new("UIGridLayout")
-	gridLayout.CellSize = UDim2.new(0, 168, 0, 196)
+	gridLayout.CellSize = UDim2.new(0, 168, 0, 214)
 	gridLayout.CellPadding = UDim2.new(0, 10, 0, 10)
 	gridLayout.SortOrder = Enum.SortOrder.LayoutOrder
 	gridLayout.Parent = grid
@@ -449,6 +463,10 @@ function CharacterSelectController.Init()
 	refreshFromServer()
 
 	-- Server failure replies for equip attempts.
+	-- WAVE 3 (v1.1 E) FIX: the old elseif branch invoked PlayerStats
+	-- as a RemoteFunction with "GetStats" — PlayerStats is a
+	-- RemoteEvent and has no function handler, so that invoke was
+	-- dead (audit F1). Removed; the server pushes PlayerStats itself.
 	local statsRemote = getRemote(remoteName("PlayerStats", "PlayerStats"))
 	if statsRemote and statsRemote:IsA("RemoteEvent") then
 		(statsRemote :: RemoteEvent).OnClientEvent:Connect(function(payload: any)
@@ -462,17 +480,6 @@ function CharacterSelectController.Init()
 				knownCoins = payload.Coins
 				refreshCoinsLabel()
 			end
-		end)
-	elseif statsRemote and statsRemote:IsA("RemoteFunction") then
-		task.spawn(function()
-			task.wait(1)
-			pcall(function()
-				local data = (statsRemote :: RemoteFunction):InvokeServer("GetStats")
-				if typeof(data) == "table" and typeof(data.Coins) == "number" then
-					knownCoins = data.Coins
-					refreshCoinsLabel()
-				end
-			end)
 		end)
 	end
 

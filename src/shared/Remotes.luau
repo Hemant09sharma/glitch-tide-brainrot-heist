@@ -79,40 +79,110 @@ Remotes.Names = {
 	-- the SelectCharacter envelope (ProgressionService); this name exists
 	-- so the fallback lookup resolves to a real, inert RemoteEvent.
 	EquipCosmetic = "EquipCosmetic",
+
+	-- Dimensions (v1.1 Wave 1, Workstream A — added Wave 3, Workstream E)
+	TeleportDimension = "TeleportDimension",
+	RequestDimensions = "RequestDimensions",
+	DimensionUpdate = "DimensionUpdate",
+
+	-- Laboratory / Expeditions / Territories / Secrets / Achievements
+	-- (v1.1 Wave 2, Workstream C — added Wave 3, Workstream E)
+	RequestLab = "RequestLab",
+	LabUpdate = "LabUpdate",
+	EvolveBrainrot = "EvolveBrainrot",
+	RequestExpeditions = "RequestExpeditions",
+	ExpeditionUpdate = "ExpeditionUpdate",
+	StartExpedition = "StartExpedition",
+	ClaimExpedition = "ClaimExpedition",
+	RequestTerritories = "RequestTerritories",
+	TerritoryUpdate = "TerritoryUpdate",
+	CaptureTerritory = "CaptureTerritory",
+	SecretDiscovered = "SecretDiscovered",
+	RequestAchievements = "RequestAchievements",
+	AchievementUnlocked = "AchievementUnlocked",
+
+	-- Titles (v1.1 Wave 3, Workstream E — added per docs/REMOTES_NEEDED_C.md:
+	-- "If Wave 3 needs a dedicated equip remote it should add EquipTitle
+	-- then, with payload {TitleId}". The NAME now exists, but NO server
+	-- handler wires it yet: AchievementService.SetEquippedTitle is never
+	-- called by any remote handler in this tree. See docs/REMOTES_WIRED_E.md
+	-- for the one-line integrator step. Until then the client equip button
+	-- fires this name and keeps the choice local-only.)
+	EquipTitle = "EquipTitle",
 }
 
 -- Events the server fires to clients.
 --
--- CONTRACT (QA 2026-11-18, verified by grep over src/server + src/client):
+-- CONTRACT (QA 2026-11-18, verified by grep over src/server + src/client;
+-- updated 2026-11-19, Wave 3 Workstream E — see docs/REMOTES_WIRED_E.md
+-- for the per-remote wiring table):
 -- every name here is CREATED, but not every name is WIRED. Names with
 -- no server handler and no client listener are orphans — firing them
 -- is a silent no-op and invoking them errors. Do NOT wire a handler
 -- that moves items/currency to a name listed as unwired until its
 -- owning service validates it.
---   WIRED (server handler + client use): Attack, UseAbility,
---     SelectCharacter, BuyCharacter, RequestShop, RequestBase,
---     RequestQuests (QuestService.GetQuests, v1.0.1 integration QA),
---     RequestCollection (ProgressionService.GetCollection, v1.0.1),
---     RequestEvents (EventService.GetActiveEvent, v1.0.1), BuyConveyor,
---     PickupBrainrot, DropBrainrot, PlaceBrainrot, StealBrainrot,
---     UpgradeBase, UpgradeBrainrot, CollectIncome,
+--   WIRED (server handler + client use): Attack (CombatService; client
+--     firer added Wave 3 in AbilityController — left-click + touch
+--     ATTACK button), UseAbility, SelectCharacter, BuyCharacter,
+--     RequestShop, RequestBase, RequestQuests (QuestService.GetQuests,
+--     v1.0.1 integration QA), RequestCollection (ProgressionService.
+--     GetCollection — client caller added Wave 3 in
+--     CollectionController), RequestEvents (EventService.GetActiveEvent
+--     — client caller added Wave 3 in HUDController), BuyConveyor,
+--     PickupBrainrot, DropBrainrot, PlaceBrainrot, StealBrainrot
+--     (RaidService; client firer added Wave 3 in InteractionController
+--     — steal scan of Placed_<InstanceId> models + owner-sign victim
+--     resolution), UpgradeBase, UpgradeBrainrot, CollectIncome,
 --     MutateBrainrot, FuseBrainrot, ClaimQuest, Rebirth, EquipCosmetic
 --     (ProgressionService, Action="EquipCosmetic" envelope),
---     NPCDialogue (server fires; InteractionController listens).
+--     NPCDialogue (server fires; InteractionController listens),
+--     TeleportDimension (DimensionsService), RequestDimensions
+--     (DimensionsService.GetDimensions), EvolveBrainrot
+--     (LaboratoryService Action envelope), RequestLab
+--     (LaboratoryService.GetLabState), StartExpedition /
+--     ClaimExpedition (ExpeditionService), RequestExpeditions
+--     (ExpeditionService.GetExpeditions), CaptureTerritory
+--     (TerritoryService), RequestTerritories
+--     (TerritoryService.GetTerritories), RequestAchievements
+--     (AchievementService.GetAchievements).
 --   SERVER-FIRED BROADCASTS (no client-to-server handler, by design):
 --     PlayerStats, WaveUpdate, RoundUpdate, SpawnEffect, DamageNumber,
 --     ConveyorUpdate, BaseUpdate, CarryUpdate, StealAlert,
 --     GlitchTideUpdate, QuestUpdate, PowerUpdate (AbilityService fires,
 --     AbilityController listens), EventUpdate + TideSurvivor (fired by
 --     EventService / TideService; HUDController listens since v1.0.1
---     integration QA and shows them via ShowEventBanner).
+--     integration QA and shows them via ShowEventBanner), BossUpdate
+--     (BossService fires on spawn/phase/2s-health/death since v1.1 D;
+--     HUDController listens since Wave 3 E — boss health banner),
+--     DimensionUpdate (DimensionsService fires; DimensionController
+--     listens since Wave 3 E), LabUpdate (LaboratoryService fires;
+--     LaboratoryController listens), ExpeditionUpdate
+--     (ExpeditionService fires; ExpeditionController listens),
+--     TerritoryUpdate (TerritoryService fires to all;
+--     TerritoryController listens), SecretDiscovered (SecretService
+--     fires an id-less payload; AchievementController listens and
+--     shows a GENERIC banner only — never a secret id/name),
+--     AchievementUnlocked (AchievementService fires;
+--     AchievementController listens).
 --   FIRED BY NO SERVICE YET (client degrades gracefully; reserved for
---     their owning services to fire): BossUpdate, SynergyUpdate.
+--     their owning services to fire): SynergyUpdate (no service fires
+--     it; synergy is folded silently into income — see
+--     docs/REMOTES_WIRED_E.md).
 --   UNWIRED — no server handler AND no client caller/listener:
 --     RequestCharacter (legacy; Main.client still waits for it),
---     UsePower (AbilityService uses UseAbility; nothing fires
---     UsePower), SettingsUpdate (no settings sync exists; mute/volume
---     are client-local).
+--     UsePower — DELIBERATE (Wave 3 E decision, see
+--     docs/REMOTES_WIRED_E.md): AbilityService.UsePower is a Lua
+--     method reached ONLY through the UseAbility handler (id-
+--     partitioned); firing the UsePower remote would hit no handler
+--     and duplicate the entry point. UseAbility is the single path.
+--     SettingsUpdate — DELIBERATE (Wave 3 E decision): no settings
+--     sync exists on the server and no DataService field stores
+--     settings; mute/volume are client-local in SoundController.
+--     Firing it would be a silent no-op dressed as a sync.
+--     EquipTitle — DEFINED but handler PENDING (see Names comment):
+--     the name exists so the client equip button has a stable
+--     target; AchievementService must connect it before equips
+--     persist. Until then the equip is local-only.
 --   RESERVED, intentionally unwired: TradeRequest / TradeAccept /
 --     TradeCancel (no trading service; see Names comment above).
 local EVENT_NAMES: { string } = {
@@ -156,6 +226,18 @@ local EVENT_NAMES: { string } = {
 	"SynergyUpdate",
 	"SettingsUpdate",
 	"EquipCosmetic",
+	"TeleportDimension",
+	"DimensionUpdate",
+	"LabUpdate",
+	"EvolveBrainrot",
+	"ExpeditionUpdate",
+	"StartExpedition",
+	"ClaimExpedition",
+	"TerritoryUpdate",
+	"CaptureTerritory",
+	"SecretDiscovered",
+	"AchievementUnlocked",
+	"EquipTitle",
 }
 
 -- RemoteFunctions (request/response): stats, shop, base state.
@@ -165,6 +247,11 @@ local FUNCTION_NAMES: { string } = {
 	"RequestQuests",
 	"RequestCollection",
 	"RequestEvents",
+	"RequestDimensions",
+	"RequestLab",
+	"RequestExpeditions",
+	"RequestTerritories",
+	"RequestAchievements",
 }
 
 local REMOTES_FOLDER_NAME = "Remotes"

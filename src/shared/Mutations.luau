@@ -255,6 +255,57 @@ local FUSION_RECIPES: { FusionRecipe } = {
 		ResultId = "wobble_king",
 		Hint = "The King absorbs the crab and wobbles on, more royal than ever. (Capstone recipe: the result is the King himself, at level 1 — fusing into the top of the ladder.)",
 	},
+	-- v1.1 Wave 2 (Workstream C): recipes for the 9 Wave-1 characters
+	-- (B's roster additions). Fails-closed by design: every input and
+	-- every result is a real roster character, so FusionService's
+	-- existing checks accept them and Economy.FusionCost prices them.
+	-- The ladder climbs one tier per step, mirroring the original
+	-- chain; the final recipe is a second capstone into the King.
+	{
+		Characters = { "wobble_waffleton", "phantom_pancake" },
+		ResultId = "prism_penguin",
+		Hint = "A wobbling waffle and a phantom pancake freeze together into a prism penguin.",
+	},
+	{
+		Characters = { "turbo_turnip", "prism_penguin" },
+		ResultId = "neon_narwhal",
+		Hint = "A racing turnip and a prism penguin dive together and surface as a neon narwhal.",
+	},
+	{
+		Characters = { "bloop_bloomington", "neon_narwhal" },
+		ResultId = "reactor_raccoon",
+		Hint = "Jelly and neon sonar overcharge into a reactor raccoon.",
+	},
+	{
+		Characters = { "crumb_comet", "reactor_raccoon" },
+		ResultId = "gravity_goblin",
+		Hint = "A comet and a reactor collapse into a gravity goblin.",
+	},
+	{
+		Characters = { "noodle_nebula", "gravity_goblin" },
+		ResultId = "thunder_tortoise",
+		Hint = "A starry noodle and a gravity goblin weather the storm into a thunder tortoise.",
+	},
+	{
+		Characters = { "toast_ghost", "thunder_tortoise" },
+		ResultId = "quantum_quokka",
+		Hint = "A haunted toast and a thunder tortoise blink out of phase as a quantum quokka.",
+	},
+	{
+		Characters = { "disco_dumpling", "quantum_quokka" },
+		ResultId = "solar_sloth",
+		Hint = "A dancing dumpling and a quantum quokka slow down into the warmth of a solar sloth.",
+	},
+	{
+		Characters = { "captain_picklebyte", "solar_sloth" },
+		ResultId = "void_vulture",
+		Hint = "The captain sails into the sun and a void vulture circles out of the dark.",
+	},
+	{
+		Characters = { "void_vulture", "wobble_king" },
+		ResultId = "wobble_king",
+		Hint = "The King absorbs the vulture and wobbles on, more royal than ever. (Capstone recipe: the result is the King himself, at level 1.)",
+	},
 }
 
 Mutations.FusionRecipes = FUSION_RECIPES

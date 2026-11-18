@@ -8,14 +8,21 @@
 --   COLLECTION  opens CollectionController if present, else an in-menu
 --               panel listing every Brainrot from the shared catalogue
 --   SETTINGS    mute toggle that actually calls SoundController, plus
---               a controls recap
+--               Master / SFX / Music volume steppers (v1.1 E) and a
+--               controls recap
 --   HOW TO PLAY shows the core loop steps + full keybind list
+--   OBJECTIVES  the starter quest chain (live top quest from
+--               QuestController when available, else the static
+--               core-loop steps) — v1.1 E onboarding
+--   LAB / EXPEDITIONS / TERRITORY / WORLDS / ACHIEVEMENTS open the
+--               new Wave 3 panels directly from the menu (v1.1 E)
 -- If a target controller is absent, the button opens a simple in-menu
 -- panel with real content (controls list / credits) — never a dead end.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 
@@ -29,6 +36,8 @@ local infoBody: TextLabel? = nil
 local infoScroll: ScrollingFrame? = nil
 local muteButton: TextButton? = nil
 local volumeButton: TextButton? = nil
+local sfxButton: TextButton? = nil
+local musicButton: TextButton? = nil
 local collectionButton: TextButton? = nil
 
 local Utils: any = nil
@@ -104,6 +113,66 @@ local function getSoundController(): any
 		return controller
 	end
 	return nil
+end
+
+-- Open a controller panel by module name (v1.1 E menu shortcuts).
+-- Returns true when a panel actually opened.
+local function openController(moduleName: string): boolean
+	local opened = false
+	pcall(function()
+		local controllers = getControllersFolder()
+		local mod = controllers and controllers:FindFirstChild(moduleName)
+		if mod then
+			local controller = require(mod)
+			if controller and controller.Open then
+				controller.Open()
+				opened = true
+			elseif controller and controller.Toggle then
+				controller.Toggle()
+				opened = true
+			end
+		end
+	end)
+	return opened
+end
+
+-- Objectives (v1.1 E onboarding): the live top quest when
+-- QuestController can supply one, else the static starter chain.
+local function buildObjectivesText(): string
+	local top: any = nil
+	pcall(function()
+		local controllers = getControllersFolder()
+		local mod = controllers and controllers:FindFirstChild("QuestController")
+		if mod then
+			local quests = require(mod)
+			if quests and quests.GetTopQuest then
+				top = quests.GetTopQuest()
+			end
+		end
+	end)
+	if typeof(top) == "table" then
+		local progress = top.Progress or top.progress or top.Current or 0
+		local goal = top.Goal or top.goal or top.Target or 1
+		local title = tostring(top.Title or top.title or top.Name or "Quest")
+		local desc = tostring(top.Description or top.description or "")
+		return "YOUR NEXT OBJECTIVE\n"
+			.. "📜 " .. title .. "  —  " .. tostring(math.floor(progress)) .. "/" .. tostring(goal) .. "\n"
+			.. desc .. "\n\n"
+			.. "Then keep going: buy Brainrots, place them, upgrade your\n"
+			.. "base, explore the Worlds (Abyssal at Lv 5, Skyfall at Lv 15),\n"
+			.. "and survive the Glitch Tide."
+	end
+	local b = getBinds()
+	return "YOUR FIRST OBJECTIVES\n"
+		.. "1. Buy a Brainrot on the conveyor (" .. b.Market .. " for Market).\n"
+		.. "2. Carry it home and place it in your base (" .. b.Interact .. ").\n"
+		.. "3. Collect the coins it earns (" .. b.Base .. " for Base).\n"
+		.. "4. Buy base upgrades in the Shop (" .. b.Shop .. ").\n"
+		.. "5. Check Quests (" .. b.Quests .. ") — the quest chain pays\n"
+		.. "   coins and gems for doing the loop.\n"
+		.. "6. Reach Lv 5 to unlock the Abyssal world, Lv 15 for Skyfall.\n\n"
+		.. "Quests are not loaded yet — this is the starter chain.\n"
+		.. "Open Quests in-game for the live list."
 end
 
 local function showInfo(title: string, body: string)
@@ -182,6 +251,11 @@ local function buildControlsText(): string
 		.. b.Market .. " — Market    •    " .. b.Shop .. " — Shop    •    " .. b.Brainrots .. " — Brainrots\n"
 		.. b.Base .. " — Base    •    " .. b.Quests .. " — Quests    •    " .. b.Collection .. " — Collection\n"
 		.. b.Mute .. " — Mute sounds\n\n"
+		.. "VOLUME\n"
+		.. "Master / SFX / Music steppers below (100% → 70% → 40%).\n"
+		.. "Music volume is stored for the future music system — no\n"
+		.. "music tracks exist yet, so it scales nothing audible today.\n"
+		.. "Volumes are client-local (no server sound store exists).\n\n"
 		.. "CREDITS\n"
 		.. "Glitch Tide — Brainrot Heist: The Memeverse.\n"
 		.. "Original fan-inspired game — no assets copied."
@@ -208,6 +282,29 @@ end
 -- Volume is separate from mute: 40% still plays, mute silences all.
 local VOLUME_STEPS: { number } = { 1, 0.7, 0.4 }
 
+local function cycleVolume(getter: string, setter: string)
+	local sound = getSoundController()
+	if not sound then
+		return
+	end
+	pcall(function()
+		local get = sound[getter]
+		local set = sound[setter]
+		if not get or not set then
+			return
+		end
+		local current = get()
+		local nextLevel = VOLUME_STEPS[1]
+		for i, step in VOLUME_STEPS do
+			if math.abs(current - step) < 0.01 then
+				nextLevel = VOLUME_STEPS[(i % #VOLUME_STEPS) + 1]
+				break
+			end
+		end
+		set(nextLevel)
+	end)
+end
+
 local function refreshVolumeButton()
 	if not volumeButton then
 		return
@@ -222,7 +319,49 @@ local function refreshVolumeButton()
 			level = value
 		end
 	end
-	volumeButton.Text = "VOLUME: " .. tostring(math.floor(level * 100 + 0.5)) .. "% (tap to change)"
+	volumeButton.Text = "MASTER: " .. tostring(math.floor(level * 100 + 0.5)) .. "%"
+end
+
+-- v1.1 E: three steppers — Master (all sound), SFX (effects), Music
+-- (stored for the future music system; scales nothing audible yet).
+local function refreshSFXButton()
+	if not sfxButton then
+		return
+	end
+	local sound = getSoundController()
+	local level = 1
+	if sound and sound.GetSFXVolume then
+		local ok, value = pcall(function()
+			return sound.GetSFXVolume()
+		end)
+		if ok and typeof(value) == "number" then
+			level = value
+		end
+	end
+	sfxButton.Text = "SFX: " .. tostring(math.floor(level * 100 + 0.5)) .. "%"
+end
+
+local function refreshMusicButton()
+	if not musicButton then
+		return
+	end
+	local sound = getSoundController()
+	local level = 1
+	if sound and sound.GetMusicVolume then
+		local ok, value = pcall(function()
+			return sound.GetMusicVolume()
+		end)
+		if ok and typeof(value) == "number" then
+			level = value
+		end
+	end
+	musicButton.Text = "MUSIC: " .. tostring(math.floor(level * 100 + 0.5)) .. "%"
+end
+
+local function refreshAllVolumeButtons()
+	refreshVolumeButton()
+	refreshSFXButton()
+	refreshMusicButton()
 end
 
 local function setSettingsButtonsVisible(visible: boolean)
@@ -231,6 +370,12 @@ local function setSettingsButtonsVisible(visible: boolean)
 	end
 	if volumeButton then
 		volumeButton.Visible = visible
+	end
+	if sfxButton then
+		sfxButton.Visible = visible
+	end
+	if musicButton then
+		musicButton.Visible = visible
 	end
 end
 
@@ -314,41 +459,36 @@ local function build(): ScreenGui
 	tagline.TextColor3 = Color3.fromRGB(255, 255, 255)
 	tagline.Parent = screenGui
 
-	local playButton = Instance.new("TextButton")
-	playButton.Name = "PlayButton"
-	playButton.AnchorPoint = Vector2.new(0.5, 0)
-	playButton.Position = UDim2.new(0.5, 0, 0.31, 0)
-	playButton.Size = UDim2.new(0.3, 0, 0.09, 0)
-	playButton.Text = "▶  PLAY"
-	styleButton(playButton, Color3.fromRGB(60, 200, 90))
-	playButton.Parent = screenGui
+	-- Two-column menu (v1.1 E): left column is the classic menu,
+	-- right column opens the new Wave 3 panels directly. On touch the
+	-- columns move outward and the buttons get wider.
+	local isTouch = UserInputService.TouchEnabled
+	local function menuButton(name: string, text: string, bg: Color3, col: number, row: number): TextButton
+		local btn = Instance.new("TextButton")
+		btn.Name = name
+		btn.AnchorPoint = Vector2.new(0.5, 0)
+		local x = if col == 1 then 0.32 else 0.68
+		if isTouch then
+			x = if col == 1 then 0.25 else 0.75
+		end
+		btn.Position = UDim2.new(x, 0, 0.31 + (row - 1) * 0.075, 0)
+		btn.Size = UDim2.new(if isTouch then 0.44 else 0.28, 0, 0.06, 0)
+		btn.Text = text
+		styleButton(btn, bg)
+		btn.Parent = screenGui
+		return btn
+	end
 
-	collectionButton = Instance.new("TextButton")
-	collectionButton.Name = "CollectionButton"
-	collectionButton.AnchorPoint = Vector2.new(0.5, 0)
-	collectionButton.Position = UDim2.new(0.5, 0, 0.42, 0)
-	collectionButton.Size = UDim2.new(0.3, 0, 0.07, 0)
-	collectionButton.Text = "📖  COLLECTION"
-	styleButton(collectionButton, Color3.fromRGB(190, 90, 200))
-	collectionButton.Parent = screenGui
-
-	local settingsButton = Instance.new("TextButton")
-	settingsButton.Name = "SettingsButton"
-	settingsButton.AnchorPoint = Vector2.new(0.5, 0)
-	settingsButton.Position = UDim2.new(0.5, 0, 0.51, 0)
-	settingsButton.Size = UDim2.new(0.3, 0, 0.07, 0)
-	settingsButton.Text = "⚙  SETTINGS"
-	styleButton(settingsButton, Color3.fromRGB(90, 90, 110))
-	settingsButton.Parent = screenGui
-
-	local howButton = Instance.new("TextButton")
-	howButton.Name = "HowToPlayButton"
-	howButton.AnchorPoint = Vector2.new(0.5, 0)
-	howButton.Position = UDim2.new(0.5, 0, 0.60, 0)
-	howButton.Size = UDim2.new(0.3, 0, 0.07, 0)
-	howButton.Text = "HOW TO PLAY"
-	styleButton(howButton, Color3.fromRGB(90, 90, 200))
-	howButton.Parent = screenGui
+	local playButton = menuButton("PlayButton", "▶  PLAY", Color3.fromRGB(60, 200, 90), 1, 1)
+	collectionButton = menuButton("CollectionButton", "📖  COLLECTION", Color3.fromRGB(190, 90, 200), 1, 2)
+	local settingsButton = menuButton("SettingsButton", "⚙  SETTINGS", Color3.fromRGB(90, 90, 110), 1, 3)
+	local howButton = menuButton("HowToPlayButton", "HOW TO PLAY", Color3.fromRGB(90, 90, 200), 1, 4)
+	local objectivesButton = menuButton("ObjectivesButton", "📜  OBJECTIVES", Color3.fromRGB(200, 150, 30), 1, 5)
+	local labButton = menuButton("LabButton", "🧪  MUTATION LAB", Color3.fromRGB(90, 70, 160), 2, 1)
+	local expeditionButton = menuButton("ExpeditionButton", "🧭  EXPEDITIONS", Color3.fromRGB(60, 120, 220), 2, 2)
+	local territoryButton = menuButton("TerritoryButton", "🏴  TERRITORY", Color3.fromRGB(200, 120, 30), 2, 3)
+	local worldsButton = menuButton("WorldsButton", "🌍  WORLDS", Color3.fromRGB(90, 160, 90), 2, 4)
+	local achievementsButton = menuButton("AchievementsButton", "🏆  ACHIEVEMENTS", Color3.fromRGB(200, 170, 30), 2, 5)
 
 	-- Shared info panel, hidden until a button opens it.
 	infoPanel = Instance.new("Frame")
@@ -377,12 +517,12 @@ local function build(): ScreenGui
 	infoTitle.Text = ""
 	infoTitle.Parent = infoPanel
 
-	-- The info body is a scrolling frame: the collection list (18
+	-- The info body is a scrolling frame: the collection list (27
 	-- Brainrots) is far taller than this panel, and the old fixed
 	-- TextLabel clipped it with no way to read past the fold.
 	infoScroll = Instance.new("ScrollingFrame")
 	infoScroll.Name = "InfoScroll"
-	infoScroll.Size = UDim2.new(1, -20, 1, -44)
+	infoScroll.Size = UDim2.new(1, -20, 1, -128)
 	infoScroll.Position = UDim2.new(0, 10, 0, 36)
 	infoScroll.BackgroundTransparency = 1
 	infoScroll.BorderSizePixel = 0
@@ -406,8 +546,8 @@ local function build(): ScreenGui
 	infoBody.Parent = infoScroll
 
 	-- Settings live inside the info panel: the mute button toggles
-	-- SoundController for real, and the volume button cycles the
-	-- master SFX volume. They share the bottom row, half-width each.
+	-- SoundController for real, and three steppers cycle Master / SFX /
+	-- Music volumes (v1.1 E). Two rows, half-width each.
 	muteButton = Instance.new("TextButton")
 	muteButton.Name = "MuteButton"
 	muteButton.Size = UDim2.new(0.5, -15, 0, 34)
@@ -447,21 +587,46 @@ local function build(): ScreenGui
 	volumeCorner.CornerRadius = UDim.new(0, 8)
 	volumeCorner.Parent = volumeButton
 	volumeButton.MouseButton1Click:Connect(function()
-		local sound = getSoundController()
-		if sound and sound.SetVolume and sound.GetVolume then
-			pcall(function()
-				local current = sound.GetVolume()
-				local nextLevel = VOLUME_STEPS[1]
-				for i, step in VOLUME_STEPS do
-					if math.abs(current - step) < 0.01 then
-						nextLevel = VOLUME_STEPS[(i % #VOLUME_STEPS) + 1]
-						break
-					end
-				end
-				sound.SetVolume(nextLevel)
-			end)
-		end
+		cycleVolume("GetVolume", "SetVolume")
 		refreshVolumeButton()
+	end)
+
+	sfxButton = Instance.new("TextButton")
+	sfxButton.Name = "SFXButton"
+	sfxButton.Size = UDim2.new(0.5, -15, 0, 34)
+	sfxButton.Position = UDim2.new(0, 10, 1, -84)
+	sfxButton.Font = Enum.Font.GothamBold
+	sfxButton.TextSize = 13
+	sfxButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	sfxButton.BackgroundColor3 = Color3.fromRGB(60, 60, 90)
+	sfxButton.BorderSizePixel = 0
+	sfxButton.Visible = false
+	sfxButton.Parent = infoPanel
+	local sfxCorner = Instance.new("UICorner")
+	sfxCorner.CornerRadius = UDim.new(0, 8)
+	sfxCorner.Parent = sfxButton
+	sfxButton.MouseButton1Click:Connect(function()
+		cycleVolume("GetSFXVolume", "SetSFXVolume")
+		refreshSFXButton()
+	end)
+
+	musicButton = Instance.new("TextButton")
+	musicButton.Name = "MusicButton"
+	musicButton.Size = UDim2.new(0.5, -15, 0, 34)
+	musicButton.Position = UDim2.new(0.5, 5, 1, -84)
+	musicButton.Font = Enum.Font.GothamBold
+	musicButton.TextSize = 13
+	musicButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	musicButton.BackgroundColor3 = Color3.fromRGB(60, 60, 90)
+	musicButton.BorderSizePixel = 0
+	musicButton.Visible = false
+	musicButton.Parent = infoPanel
+	local musicCorner = Instance.new("UICorner")
+	musicCorner.CornerRadius = UDim.new(0, 8)
+	musicCorner.Parent = musicButton
+	musicButton.MouseButton1Click:Connect(function()
+		cycleVolume("GetMusicVolume", "SetMusicVolume")
+		refreshMusicButton()
 	end)
 
 	local preview = Instance.new("TextLabel")
@@ -533,7 +698,8 @@ local function build(): ScreenGui
 		end
 	end)
 
-	-- SETTINGS: mute toggle (real) + volume cycle (real) + controls recap.
+	-- SETTINGS: mute toggle (real) + Master / SFX / Music steppers
+	-- (real) + controls recap.
 	settingsButton.MouseButton1Click:Connect(function()
 		if infoPanel and infoPanel.Visible and infoTitle and infoTitle.Text == "⚙  SETTINGS" then
 			hideInfo()
@@ -543,7 +709,7 @@ local function build(): ScreenGui
 		showInfo("⚙  SETTINGS", buildControlsText())
 		setSettingsButtonsVisible(true)
 		refreshMuteButton()
-		refreshVolumeButton()
+		refreshAllVolumeButtons()
 	end)
 
 	-- HOW TO PLAY: the core loop + keybinds.
@@ -556,6 +722,35 @@ local function build(): ScreenGui
 		setSettingsButtonsVisible(false)
 		showInfo("HOW TO PLAY", buildHowToPlayText())
 	end)
+
+	-- OBJECTIVES (v1.1 E): the starter quest chain — live top quest
+	-- when QuestController can supply one, else the static steps.
+	objectivesButton.MouseButton1Click:Connect(function()
+		if infoPanel and infoPanel.Visible and infoTitle and infoTitle.Text == "📜  OBJECTIVES" then
+			hideInfo()
+			setSettingsButtonsVisible(false)
+			return
+		end
+		setSettingsButtonsVisible(false)
+		showInfo("📜  OBJECTIVES", buildObjectivesText())
+	end)
+
+	-- New-panel shortcuts (v1.1 E): open the Wave 3 panels directly.
+	-- If a controller is absent, show the info panel with a plain
+	-- explanation instead of a dead button.
+	local function panelShortcut(moduleName: string, title: string, missing: string)
+		return function()
+			if not openController(moduleName) then
+				setSettingsButtonsVisible(false)
+				showInfo(title, missing)
+			end
+		end
+	end
+	labButton.MouseButton1Click:Connect(panelShortcut("LaboratoryController", "🧪  MUTATION LAB", "The Mutation Lab panel is not loaded yet. It opens from the Shop (B) once the client finishes loading."))
+	expeditionButton.MouseButton1Click:Connect(panelShortcut("ExpeditionController", "🧭  EXPEDITIONS", "The Expeditions panel is not loaded yet. It opens from the HUD menu once the client finishes loading."))
+	territoryButton.MouseButton1Click:Connect(panelShortcut("TerritoryController", "🏴  TERRITORY", "The Territories panel is not loaded yet. It opens from the HUD menu once the client finishes loading."))
+	worldsButton.MouseButton1Click:Connect(panelShortcut("DimensionController", "🌍  WORLDS", "The Worlds panel is not loaded yet. It opens from the HUD menu once the client finishes loading."))
+	achievementsButton.MouseButton1Click:Connect(panelShortcut("AchievementController", "🏆  ACHIEVEMENTS", "The Achievements panel is not loaded yet. It opens from the HUD menu once the client finishes loading."))
 
 	-- Title pop-in.
 	task.spawn(function()
@@ -575,7 +770,7 @@ function MainMenu.Show()
 	gui.Enabled = true
 	visible = true
 	refreshMuteButton()
-	refreshVolumeButton()
+	refreshAllVolumeButtons()
 end
 
 function MainMenu.Hide()

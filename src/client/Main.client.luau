@@ -14,9 +14,14 @@ local LocalPlayer = Players.LocalPlayer
 
 -- Ordered list of controllers. Keep this order: HUD -> Interaction ->
 -- Market -> CharacterSelect -> Shop -> Base -> AbilityController ->
--- Quest -> Collection -> Camera. If a parallel builder adds another
--- controller module to the Controllers folder, add its name here in the
--- position it should initialise.
+-- Quest -> Collection -> Dimension -> Laboratory -> Expedition ->
+-- Territory -> Achievement -> Camera. The five Wave 3 (v1.1 E)
+-- controllers load after Collection and before Camera: they lazy-
+-- require each other through PanelKit, so their Init order relative
+-- to each other does not matter, but they must exist before any panel
+-- opens. If a parallel builder adds another controller module to the
+-- Controllers folder, add its name here in the position it should
+-- initialise.
 local CONTROLLER_ORDER = {
 	"HUDController",
 	"InteractionController",
@@ -27,6 +32,11 @@ local CONTROLLER_ORDER = {
 	"AbilityController",
 	"QuestController",
 	"CollectionController",
+	"DimensionController",
+	"LaboratoryController",
+	"ExpeditionController",
+	"TerritoryController",
+	"AchievementController",
 	"CameraController",
 }
 
@@ -63,6 +73,25 @@ local function waitForRemotes()
 		"CarryUpdate",
 		"StealAlert",
 		"GlitchTideUpdate",
+		-- Wave 3 (v1.1 E) remotes: Dimensions (A), Laboratory /
+		-- Expedition / Territory / Secret / Achievement (C).
+		"TeleportDimension",
+		"RequestDimensions",
+		"DimensionUpdate",
+		"RequestLab",
+		"LabUpdate",
+		"EvolveBrainrot",
+		"RequestExpeditions",
+		"ExpeditionUpdate",
+		"StartExpedition",
+		"ClaimExpedition",
+		"RequestTerritories",
+		"TerritoryUpdate",
+		"CaptureTerritory",
+		"SecretDiscovered",
+		"RequestAchievements",
+		"AchievementUnlocked",
+		"EquipTitle",
 	}
 	for _, name in ipairs(names) do
 		local ok, result = pcall(function()

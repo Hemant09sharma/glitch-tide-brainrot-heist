@@ -74,6 +74,7 @@ local _bossService: any = nil
 local _carryService: any = nil
 local _progressionService: any = nil
 local _lightingService: any = nil
+local _questService: any = nil
 local _started = false
 
 local _playerDimension: { [Player]: string } = {}
@@ -216,6 +217,27 @@ function DimensionsService.TeleportToDimension(player: Player, dimensionId: any)
 	if def == nil then
 		return false, "unknown dimension"
 	end
+	-- v1.1 (Workstream C): world unlock gate. The unlock attribute
+	-- ("DimensionUnlocked_<id>", set by ProgressionService on unlock)
+	-- is the fast path; otherwise CanAccessDimension decides (and
+	-- unlocks + sets the attribute when the level requirement is
+	-- met). A locked teleport is denied with a TeleportDenied
+	-- broadcast — never a silent fail. When no ProgressionService is
+	-- linked at all, the gate fails OPEN (Wave 1 free travel) rather
+	-- than locking everyone out over a wiring problem.
+	if _progressionService ~= nil then
+		local unlocked = player:GetAttribute("DimensionUnlocked_" .. id) == true
+		if not unlocked and type(_progressionService.CanAccessDimension) == "function" then
+			local ok, allowed = pcall(_progressionService.CanAccessDimension, player, id)
+			if ok then
+				unlocked = allowed == true
+			end
+		end
+		if not unlocked then
+			fireUpdate(player, { Action = "TeleportDenied", Reason = "locked" })
+			return false, "dimension locked"
+		end
+	end
 	local root, _humanoid = getRoot(player)
 	if root == nil then
 		return false, "no character"
@@ -249,6 +271,12 @@ function DimensionsService.TeleportToDimension(player: Player, dimensionId: any)
 	_playerDimension[player] = id
 	_teleportAt[player] = now
 	_checkpointRuns[player] = nil
+	-- v1.1 (Workstream C): quest-progress hook — dimension visit.
+	if _questService and type(_questService.ReportProgress) == "function" then
+		pcall(function()
+			_questService.ReportProgress(player, "dimension", "visit_" .. id, 1)
+		end)
+	end
 	fireUpdate(player, {
 		Action = "Teleported",
 		Dimension = id,
@@ -341,6 +369,12 @@ function DimensionsService.OpenChest(player: Player, chestName: any): (boolean, 
 	grantCoins(player, chest.Coins)
 	grantXP(player, chest.XP)
 	notifyBalance(player)
+	-- v1.1 (Workstream C): quest-progress hook — dimension chest.
+	if _questService and type(_questService.ReportProgress) == "function" then
+		pcall(function()
+			_questService.ReportProgress(player, "dimension", "chest", 1)
+		end)
+	end
 	if perPlayer == nil then
 		perPlayer = {}
 		_chestAvailableAt[player] = perPlayer
@@ -573,6 +607,12 @@ local function onCheckpointTouched(player: Player, checkpointIndex: number): ()
 		end
 	end
 	notifyBalance(player)
+	-- v1.1 (Workstream C): quest-progress hook — checkpoint run done.
+	if _questService and type(_questService.ReportProgress) == "function" then
+		pcall(function()
+			_questService.ReportProgress(player, "dimension", "checkpoint", 1)
+		end)
+	end
 	fireUpdate(player, {
 		Action = "CheckpointComplete",
 		ElapsedSeconds = math.floor(elapsed),
@@ -844,6 +884,12 @@ end
 
 function DimensionsService.SetProgressionService(progressionService: any): ()
 	_progressionService = progressionService
+end
+
+function DimensionsService.SetQuestService(questService: any): ()
+	if questService and type(questService.ReportProgress) == "function" then
+		_questService = questService
+	end
 end
 
 function DimensionsService.SetLightingService(lightingService: any): ()

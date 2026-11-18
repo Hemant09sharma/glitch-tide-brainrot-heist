@@ -53,6 +53,19 @@ local OPTIONAL_SERVICES = {
 	"BossService",
 	"WaveService",
 	"ProgressionService",
+	-- v1.1: visual/world services (generic fallback Init(dataService,
+	-- economyService, map) matches their signatures), then companions,
+	-- then the Wave-2 systems (explicit branches below — their Init
+	-- argument orders do NOT match the generic fallback).
+	"LightingService",
+	"EnvironmentService",
+	"DimensionsService",
+	"CompanionService",
+	"LaboratoryService",
+	"ExpeditionService",
+	"TerritoryService",
+	"SecretService",
+	"AchievementService",
 }
 
 local function getRemotesFolder(): Folder?
@@ -362,6 +375,15 @@ local function loadOptional(name: string): ()
 								return result
 							end
 						end
+						-- v1.1: companion TideProtection (per-hit roll).
+						-- CompanionService loads later; resolve lazily.
+						local companion = _optional["CompanionService"]
+						if companion ~= nil and type(companion.IsTideProtected) == "function" then
+							local ok3, protected = pcall(companion.IsTideProtected, player)
+							if ok3 and protected == true then
+								return true
+							end
+						end
 						return false
 					end,
 				})
@@ -415,6 +437,27 @@ local function loadOptional(name: string): ()
 			-- Init(dataService, map, npcService).
 			initOk, initErr = pcall(function()
 				service.Init(_dataService, _map, npcService)
+			end)
+		elseif name == "LaboratoryService" then
+			-- Init(dataService, mutationService, fusionService).
+			-- Generic fallback would pass economyService/map instead.
+			initOk, initErr = pcall(function()
+				service.Init(_dataService, mutationService, _optional["FusionService"])
+			end)
+		elseif name == "TerritoryService" then
+			-- Init(dataService, map).
+			initOk, initErr = pcall(function()
+				service.Init(_dataService, _map)
+			end)
+		elseif name == "SecretService" then
+			-- Init(dataService, npcService).
+			initOk, initErr = pcall(function()
+				service.Init(_dataService, npcService)
+			end)
+		elseif name == "AchievementService" then
+			-- Init(dataService, questService).
+			initOk, initErr = pcall(function()
+				service.Init(_dataService, questService)
 			end)
 		else
 			initOk, initErr = pcall(function()
@@ -497,6 +540,17 @@ local function wireCrossLinks(): ()
 		SetProgressionService = _optional["ProgressionService"],
 		SetBossService = _optional["BossService"],
 		SetEventService = _optional["EventService"],
+		-- v1.1: DimensionsService takes SetLightingService so its
+		-- teleports can tint the portal light; TideService uses a
+		-- pcall-require fallback for LightingService instead.
+		SetLightingService = _optional["LightingService"],
+		SetCompanionService = _optional["CompanionService"],
+		SetDimensionsService = _optional["DimensionsService"],
+		SetLaboratoryService = _optional["LaboratoryService"],
+		SetExpeditionService = _optional["ExpeditionService"],
+		SetTerritoryService = _optional["TerritoryService"],
+		SetSecretService = _optional["SecretService"],
+		SetAchievementService = _optional["AchievementService"],
 	}
 	for _, service in pairs(_optional) do
 		wireAll(service, shared)

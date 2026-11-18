@@ -12,12 +12,20 @@
 --   1/2/3 — equipped loadout powers (the 3 powers in
 --     data.AbilityLoadout, pushed by the server on PlayerStats).
 -- Touch: three large thumb buttons at the bottom-right for Q/F/R, a
--- smaller row above for the 1/2/3 loadout powers, plus tap = fire.
+-- smaller row above for the 1/2/3 loadout powers, plus a big ATTACK
+-- button (melee has no keybind; desktop uses left-click instead).
 --
 -- Firing: UseAbility RemoteEvent with the power id string. The server is
 -- authoritative on cooldowns and validity. Cooldown display runs locally
 -- from the shared Powers cooldowns, and is corrected whenever the
 -- server sends a PowerUpdate event.
+-- Wave 3 (v1.1 E): left-click melee Attack. MainMenu advertises a
+-- melee attack, and CombatService has a server handler (0.45s cooldown,
+-- range/arc/line-of-sight, Creator-tag damage) — but NO client ever
+-- fired the Attack remote (audit F1). AbilityController.Attack() is
+-- the firer: left mouse button (gameProcessed=false, so UI clicks
+-- don't swing) plus a touch-only ATTACK button. The server ignores
+-- the payload, so the client fires with none.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -82,6 +90,15 @@ local cooldownEnds: { [string]: number } = {}
 local lastFireAt: { [string]: number } = {}
 local currentCharacterId: string = "wobble_waffleton"
 local isTouch = false
+-- Session-only power-use counts (v1.1 E mastery display): how many
+-- times this session each power id was fired. The server does NOT
+-- push mastery state (no PowerMasteryUpdate exists), so the Shop
+-- Powers tab shows these counts labelled "this session" next to the
+-- mastery formula — never as the server mastery level.
+local sessionPowerUses: { [string]: number } = {}
+-- Melee attack client cooldown (matches CombatService's 0.45s).
+local lastAttackAt = 0
+local ATTACK_COOLDOWN = 0.45
 
 local function getRemotesFolder(): Folder?
 	local folder = ReplicatedStorage:FindFirstChild("Remotes")
@@ -172,6 +189,7 @@ function AbilityController.UseSlot(slotKey: string)
 	end
 	lastFireAt[slotKey] = os.clock()
 	local powerId = slotDef.powerId
+	sessionPowerUses[powerId] = (sessionPowerUses[powerId] or 0) + 1
 	local remote = getRemote(remoteName("UseAbility", "UseAbility"))
 	if not remote or not remote:IsA("RemoteEvent") then
 		return
@@ -207,6 +225,54 @@ function AbilityController.UseSlot(slotKey: string)
 			):Play()
 		end)
 	end
+end
+
+-- Session power-use counts (see the sessionPowerUses note above).
+-- Returns a copy: { [powerId]: usesThisSession }.
+function AbilityController.GetSessionPowerUses(): { [string]: number }
+	local copy: { [string]: number } = {}
+	for id, count in sessionPowerUses do
+		copy[id] = count
+	end
+	return copy
+end
+
+-- Melee attack (v1.1 E): fires the Attack RemoteEvent with no payload
+-- (CombatService.onAttack ignores the payload; it enforces the 0.45s
+-- cooldown, range, arc, line-of-sight and Creator-tag damage
+-- server-side). Client mirrors the 0.45s cooldown so the swing can't
+-- be spammed locally, and plays the swing sound + attack animation.
+function AbilityController.Attack()
+	local now = os.clock()
+	if now - lastAttackAt < ATTACK_COOLDOWN then
+		return
+	end
+	lastAttackAt = now
+	local remote = getRemote(remoteName("Attack", "Attack"))
+	if not remote or not remote:IsA("RemoteEvent") then
+		return
+	end
+	pcall(function()
+		(remote :: RemoteEvent):FireServer()
+	end)
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("SoundController")
+		if mod then
+			local sound = require(mod)
+			if sound.PlaySwing then
+				sound.PlaySwing()
+			end
+		end
+	end)
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("AnimationController")
+		if mod then
+			local anim = require(mod)
+			if anim.PlayAttack then
+				anim.PlayAttack()
+			end
+		end
+	end)
 end
 
 -- Rebuild the bar for a character: slot Q becomes that character's
@@ -450,6 +516,28 @@ function AbilityController.Init()
 		buildSlotButton(bar, slot, i, loadoutSize, 0)
 	end
 
+	-- Touch-only ATTACK button (v1.1 E): melee has no keybind, so
+	-- touch players get a big thumb button. On desktop the button
+	-- stays hidden — left-click is the attack there.
+	if isTouch then
+		local attackButton = Instance.new("TextButton")
+		attackButton.Name = "AttackButton"
+		attackButton.AnchorPoint = Vector2.new(1, 0.5)
+		attackButton.Position = UDim2.new(1, -16, 0.5, -40)
+		attackButton.Size = UDim2.new(0, 76, 0, 76)
+		attackButton.Text = "⚔️\nATTACK"
+		attackButton.Font = Enum.Font.GothamBold
+		attackButton.TextSize = 14
+		attackButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+		attackButton.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+		attackButton.BorderSizePixel = 0
+		attackButton.Parent = gui
+		corner(attackButton, 38)
+		attackButton.MouseButton1Click:Connect(function()
+			AbilityController.Attack()
+		end)
+	end
+
 	-- Cooldown ticker: refresh overlays + countdown text every frame.
 	RunService.RenderStepped:Connect(function()
 		local allSlots: { any } = {}
@@ -535,6 +623,14 @@ function AbilityController.Init()
 		if gameProcessed then
 			return
 		end
+		-- Left-click melee attack (v1.1 E): gameProcessed=false means
+		-- clicks on GUI (buttons, panels) don't swing. Touch taps
+		-- arrive as Touch, not MouseButton1, so this can't double-fire
+		-- with the touch ATTACK button.
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			AbilityController.Attack()
+			return
+		end
 		local slotKey = keyToSlot[input.KeyCode]
 		if slotKey then
 			AbilityController.UseSlot(slotKey)
@@ -543,7 +639,7 @@ function AbilityController.Init()
 
 	AbilityController.SetCharacter(currentCharacterId)
 	AbilityController.RefreshBar()
-	print("[GlitchTide] AbilityController ready (Q=primary, F=Slam, R=Heal, 1/2/3=loadout; E=Interact)")
+	print("[GlitchTide] AbilityController ready (Q=primary, F=Slam, R=Heal, 1/2/3=loadout; E=Interact; left-click=Attack)")
 end
 
 return AbilityController

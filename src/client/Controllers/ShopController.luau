@@ -15,7 +15,16 @@
 --               Placed Brainrots cannot fuse (the server rejects them).
 --   POWERS    — every power; a power unlocks by owning its Brainrot,
 --               so the button buys that Brainrot (BuyCharacter) when
---               locked and shows "OWNED" when unlocked.
+--               locked and shows "OWNED" when unlocked. Wave 3 (v1.1 E)
+--               added the mastery display: the formula (+10 XP/use,
+--               max Lv 5, +5% damage / −2% cooldown per level) plus
+--               this-session use counts (labelled session-only — the
+--               server pushes no mastery state).
+-- The Shop also has a 🧪 MUTATION LAB shortcut button that opens the
+-- full LaboratoryController panel (evolve / traits / recipes /
+-- alternate forms). On-expedition Brainrots are filtered out of the
+-- fuse list (QA_V11_C §9.3). The dead FireServer("GetBase") branch
+-- was removed in Wave 3 E — RequestBase is a function.
 -- Every purchase button fires its server remote and shows "Sent —
 -- waiting for server…". It NEVER claims success on its own: the result
 -- is shown only when the server pushes back (PlayerStats / BaseUpdate)
@@ -77,6 +86,29 @@ local mutateTarget: string? = nil
 -- Fusion tab: InstanceIds of the two unplaced Brainrots being fused.
 local fuseA: string? = nil
 local fuseB: string? = nil
+
+-- The instance currently away on an expedition (nil when none). Only
+-- one trip can be active, so excluding this one id is the whole
+-- on-expedition rule (QA_V11_C §9.3): the server enforces
+-- OnExpedition only at the expedition API, so the client must not
+-- offer that instance for fuse / mutate / level-up lists.
+local function expeditionInstanceId(): string?
+	local ok, id = pcall(function()
+		local mod = script.Parent:FindFirstChild("ExpeditionController")
+		if not mod then
+			return nil
+		end
+		local exp = require(mod)
+		if exp.GetActiveInstanceId then
+			return exp.GetActiveInstanceId()
+		end
+		return nil
+	end)
+	if ok and typeof(id) == "string" and id ~= "" then
+		return id
+	end
+	return nil
+end
 
 local UPGRADE_KINDS: { { kind: string, name: string, desc: string } } = {
 	{ kind = "BaseSlot", name = "Base Slot", desc = "Adds one slot to your base so you can place another Brainrot." },
@@ -633,6 +665,25 @@ local function rebuildPowers()
 		note.Position = UDim2.new(0, 8, 0, 8)
 		return
 	end
+	-- Mastery display (v1.1 E, Workstream B): the server grants +10 XP
+	-- per successful power use, max level 5, +5% damage / −2% cooldown
+	-- per level (cooldown floor 3s) — but it pushes NO mastery state
+	-- to the client (no PowerMasteryUpdate exists). So the tab shows
+	-- the formula (true) plus this session's use counts from
+	-- AbilityController (labelled session-only, never the server level).
+	local sessionUses: { [string]: number } = {}
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("AbilityController")
+		if mod then
+			local ability = require(mod)
+			if ability.GetSessionPowerUses then
+				sessionUses = ability.GetSessionPowerUses()
+			end
+		end
+	end)
+	local masteryNote = makeLabel(contentFrame, "Mastery: +10 XP per use • max Lv 5 • +5% damage / −2% cooldown per level (cooldown floor 3s). Use counts below are THIS SESSION only — the server keeps the real mastery level.", 12, Color3.fromRGB(120, 220, 255), true)
+	masteryNote.Size = UDim2.new(1, -16, 0, 36)
+	masteryNote.Position = UDim2.new(0, 8, 0, 8)
 	for _, power in list do
 		-- Which Brainrot owns this power? Primaries map via Characters.
 		local ownerId: string? = nil
@@ -653,9 +704,11 @@ local function rebuildPowers()
 		end
 		local isGeneric = ownerId == nil
 		local isOwned = isGeneric or (ownerId ~= nil and owned[ownerId] == true)
+		local uses = sessionUses[tostring(power.Id)] or 0
+		local masteryText = if uses > 0 then "  •  Used " .. tostring(uses) .. "× this session" else "  •  Not used this session"
 		local row = buildRow(
 			tostring(power.Name) .. "  •  " .. tostring(ownerName),
-			tostring(power.Description or ""),
+			tostring(power.Description or "") .. masteryText,
 			if isGeneric then "FREE" else (if isOwned then "OWNED" else "Unlock via Brainrot"),
 			if isOwned then "OWNED" else "UNLOCK",
 			function()
@@ -741,15 +794,29 @@ function ShopController.RefreshShopData()
 				end
 				local unplaced = result.Unplaced or result.unplaced
 				if typeof(unplaced) == "table" then
-					unplacedList = unplaced
+					-- On-expedition filter (v1.1 E): never offer the
+					-- instance away on an expedition for fuse/mutate.
+					local away = expeditionInstanceId()
+					if away then
+						local filtered: { any } = {}
+						for _, inst in unplaced do
+							if typeof(inst) == "table" and inst.InstanceId ~= away then
+								table.insert(filtered, inst)
+							end
+						end
+						unplacedList = filtered
+					else
+						unplacedList = unplaced
+					end
 				end
 				ShopController.Rebuild()
 			end
 		end)
-	elseif baseFn and baseFn:IsA("RemoteEvent") then
-		pcall(function()
-			(baseFn :: RemoteEvent):FireServer("GetBase")
-		end)
+	else
+		-- WAVE 3 (v1.1 E) FIX: the old elseif branch fired "GetBase"
+		-- on RequestBase as a RemoteEvent — RequestBase is a
+		-- RemoteFunction and has no event handler, so the fire was
+		-- dead (audit F1). Removed, not replaced.
 	end
 end
 
@@ -867,6 +934,33 @@ function ShopController.Init()
 	closeBtn.Parent = panel
 	closeBtn.MouseButton1Click:Connect(function()
 		ShopController.Close()
+	end)
+
+	-- Mutation Lab shortcut (v1.1 E): the full Lab (evolve / traits /
+	-- recipes / alternate forms) lives in LaboratoryController; this
+	-- button opens it from the Shop.
+	local labBtn = Instance.new("TextButton")
+	labBtn.Name = "LabButton"
+	labBtn.Size = UDim2.new(0, 104, 0, 24)
+	labBtn.Position = UDim2.new(1, -286, 0, 12)
+	labBtn.Text = "🧪 MUTATION LAB"
+	labBtn.Font = Enum.Font.GothamBold
+	labBtn.TextSize = 11
+	labBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	labBtn.BackgroundColor3 = Color3.fromRGB(90, 70, 160)
+	labBtn.BorderSizePixel = 0
+	corner(labBtn, 8)
+	labBtn.Parent = panel
+	labBtn.MouseButton1Click:Connect(function()
+		pcall(function()
+			local mod = script.Parent:FindFirstChild("LaboratoryController")
+			if mod then
+				local lab = require(mod)
+				if lab.Open then
+					lab.Open()
+				end
+			end
+		end)
 	end)
 
 	statusLabel = makeLabel(panel, "Prices are shown for display only — the server validates every purchase.", 12, Color3.fromRGB(200, 220, 255), false)

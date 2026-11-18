@@ -1,19 +1,25 @@
 --!strict
 -- QuestService.luau
 -- Glitch Tide — Brainrot Heist: The Memeverse.
--- 16 quests across tutorial / daily / collection / exploration / raid /
--- mutation / combat / event. Progress is auto-tracked: other services
--- call RecordEvent(player, eventName, amount), and a lightweight 5s
--- poll also derives earn-coins / own-distinct / discover-rarity
--- progress straight from the player's data so quests advance even when
--- a caller forgets to report. Rewards are granted exactly once, only
--- through ClaimQuest, after the server re-checks the goal.
+-- 54 quests across tutorial / daily / weekly / story / collection /
+-- exploration / secret / raid / mutation / combat / event / expedition /
+-- territory / dimension. Progress is auto-tracked three ways:
+-- RecordEvent(player, eventName, amount) called by other services,
+-- ReportProgress(player, kind, id, amount) — the v1.1 canonical hook
+-- (maps a progress kind to quest events AND forwards to
+-- AchievementService.CheckProgress / ProgressionService.CheckChallenge)
+-- — and a lightweight 5s poll that derives earn-coins / own-distinct /
+-- discover-rarity progress straight from the player's data, plus a
+-- zone poll (Forbidden Rift / Mutation Lab / Abyssal / Skyfall).
+-- Rewards are granted exactly once, only through ClaimQuest, after
+-- the server re-checks the goal. Daily quests reset by calendar day
+-- (data.QuestDay); weekly quests reset by ISO week (data.QuestWeek).
+-- Story quests chain via the optional Requires field (the prerequisite
+-- must be CLAIMED before the next quest can progress).
 --
--- REMOTE: ClaimQuest and QuestUpdate both live in Remotes.Names
--- (ClaimQuest reuses the CollectIncome remote with an Action envelope
--- ({Action="ClaimQuest", QuestId=...}); handlers ignore any payload
--- without it). Quest progress fires on QuestUpdate when present, else
--- PlayerStats. (PlayerStats IS a RemoteEvent in Remotes.luau — the
+-- REMOTE: ClaimQuest binds directly to the ClaimQuest RemoteEvent
+-- (the old header claiming it reused CollectIncome was wrong).
+-- Quest progress fires on QuestUpdate when present, else PlayerStats. (PlayerStats IS a RemoteEvent in Remotes.luau — the
 -- v1.0.0 comment claiming it was a RemoteFunction was wrong.)
 --
 -- v1.0.1 QA: the "Epic Discovery" quest fired for Rare Brainrots
@@ -35,15 +41,17 @@ local QuestService = {}
 
 local _dataService: any = nil
 local _progressionService: any = nil
+local _achievementService: any = nil
 
 export type QuestDef = {
 	Id: string,
 	Name: string,
 	Description: string,
-	Category: string, -- "Tutorial" | "Daily" | "Collection" | "Exploration" | "Raid" | "Mutation" | "Combat" | "Event"
+	Category: string, -- "Tutorial" | "Daily" | "Weekly" | "Story" | "Collection" | "Exploration" | "Secret" | "Raid" | "Mutation" | "Combat" | "Event" | "Expedition" | "Territory" | "Dimension" | "Survival"
 	Event: string,
 	Goal: number,
 	Reward: { Coins: number, Gems: number, XP: number, EventTokens: number },
+	Requires: string?, -- quest Id that must be CLAIMED before this quest can progress (story chains)
 }
 
 local QUESTS: { QuestDef } = {
@@ -71,6 +79,60 @@ local QUESTS: { QuestDef } = {
 	{ Id = "q_defeat_boss", Name = "Algorithm Breaker", Description = "Defeat THE ALGORITHM boss.", Category = "Combat", Event = "defeat_boss", Goal = 1, Reward = { Coins = 1000, Gems = 50, XP = 250, EventTokens = 20 } },
 	-- Event ---------------------------------------------------------------
 	{ Id = "q_survive_meteor", Name = "Meteor Dodger", Description = "Survive a Meteor tide.", Category = "Event", Event = "survive_meteor_tide", Goal = 1, Reward = { Coins = 500, Gems = 15, XP = 150, EventTokens = 10 } },
+	-- Main story chain (v1.1, Workstream C) ---------------------------
+	-- Five stages, chained: each stage only progresses once the
+	-- previous stage is CLAIMED (Requires).
+	{ Id = "q_story_1", Name = "A Glitch in the Tale", Description = "Buy your first Brainrot and begin the story.", Category = "Story", Event = "buy_brainrot", Goal = 1, Reward = { Coins = 100, Gems = 0, XP = 25, EventTokens = 0 } },
+	{ Id = "q_story_2", Name = "Settle In", Description = "Place a Brainrot in your base.", Category = "Story", Event = "place_brainrot", Goal = 1, Reward = { Coins = 150, Gems = 5, XP = 50, EventTokens = 0 }, Requires = "q_story_1" },
+	{ Id = "q_story_3", Name = "The Merchant's Whisper", Description = "Discover a hidden secret of the Memeverse.", Category = "Story", Event = "discover_secret", Goal = 1, Reward = { Coins = 500, Gems = 15, XP = 150, EventTokens = 5 }, Requires = "q_story_2" },
+	{ Id = "q_story_4", Name = "Lab Rat Supreme", Description = "Evolve a Brainrot in the Laboratory.", Category = "Story", Event = "evolve", Goal = 1, Reward = { Coins = 500, Gems = 10, XP = 150, EventTokens = 5 }, Requires = "q_story_3" },
+	{ Id = "q_story_5", Name = "Tidecaller", Description = "Survive 3 Glitch Tides.", Category = "Story", Event = "survive_tide", Goal = 3, Reward = { Coins = 1000, Gems = 25, XP = 250, EventTokens = 10 }, Requires = "q_story_4" },
+	-- Daily, extra (v1.1) ------------------------------------------------
+	{ Id = "q_daily_earn_10k", Name = "Big Earner", Description = "Earn 10,000 coins today.", Category = "Daily", Event = "earn_coins", Goal = 10000, Reward = { Coins = 400, Gems = 10, XP = 100, EventTokens = 5 } },
+	{ Id = "q_daily_tides_2", Name = "Double Survivor", Description = "Survive 2 Glitch Tides today.", Category = "Daily", Event = "survive_tide", Goal = 2, Reward = { Coins = 300, Gems = 10, XP = 75, EventTokens = 5 } },
+	{ Id = "q_daily_expedition", Name = "Field Trip", Description = "Complete 1 expedition today.", Category = "Daily", Event = "complete_expedition", Goal = 1, Reward = { Coins = 300, Gems = 10, XP = 100, EventTokens = 5 } },
+	-- Weekly (v1.1; reset by ISO week, see ensureQuests) --------------
+	{ Id = "q_weekly_earn_50k", Name = "Tycoon Week", Description = "Earn 50,000 coins this week.", Category = "Weekly", Event = "earn_coins", Goal = 50000, Reward = { Coins = 1500, Gems = 25, XP = 250, EventTokens = 10 } },
+	{ Id = "q_weekly_tides_10", Name = "Tideproof", Description = "Survive 10 Glitch Tides this week.", Category = "Weekly", Event = "survive_tide", Goal = 10, Reward = { Coins = 1500, Gems = 25, XP = 250, EventTokens = 15 } },
+	{ Id = "q_weekly_bosses_3", Name = "Boss Bounty", Description = "Defeat 3 world bosses this week.", Category = "Weekly", Event = "defeat_boss", Goal = 3, Reward = { Coins = 2000, Gems = 50, XP = 400, EventTokens = 20 } },
+	-- Exploration, extra (v1.1) ------------------------------------------
+	{ Id = "q_visit_abyssal", Name = "Into the Deep", Description = "Visit the Abyssal Kingdom.", Category = "Exploration", Event = "visit_abyssal", Goal = 1, Reward = { Coins = 250, Gems = 5, XP = 75, EventTokens = 0 } },
+	{ Id = "q_visit_skyfall", Name = "Into the Sky", Description = "Visit the Skyfall Kingdom.", Category = "Exploration", Event = "visit_skyfall", Goal = 1, Reward = { Coins = 250, Gems = 5, XP = 75, EventTokens = 0 } },
+	-- Secrets (v1.1) ------------------------------------------------------
+	{ Id = "q_secret_1", Name = "Secret Seeker", Description = "Discover 1 hidden secret.", Category = "Secret", Event = "discover_secret", Goal = 1, Reward = { Coins = 500, Gems = 15, XP = 150, EventTokens = 0 } },
+	{ Id = "q_secret_3", Name = "Secret Hunter", Description = "Discover 3 hidden secrets.", Category = "Secret", Event = "discover_secret", Goal = 3, Reward = { Coins = 1500, Gems = 50, XP = 400, EventTokens = 0 } },
+	-- Collection, extra (v1.1) --------------------------------------------
+	{ Id = "q_own_10", Name = "Established Collection", Description = "Own 10 distinct Brainrots.", Category = "Collection", Event = "own_distinct", Goal = 10, Reward = { Coins = 500, Gems = 15, XP = 150, EventTokens = 0 } },
+	{ Id = "q_own_20", Name = "Grand Collection", Description = "Own 20 distinct Brainrots.", Category = "Collection", Event = "own_distinct", Goal = 20, Reward = { Coins = 1000, Gems = 25, XP = 300, EventTokens = 0 } },
+	{ Id = "q_own_27", Name = "Complete Collection", Description = "Own all 27 Brainrots.", Category = "Collection", Event = "own_distinct", Goal = 27, Reward = { Coins = 5000, Gems = 100, XP = 1000, EventTokens = 50 } },
+	-- Mutation / Laboratory, extra (v1.1) ----------------------------------
+	{ Id = "q_mutate_5", Name = "Serial Mutator", Description = "Mutate 5 Brainrots.", Category = "Mutation", Event = "mutate", Goal = 5, Reward = { Coins = 750, Gems = 15, XP = 200, EventTokens = 10 } },
+	{ Id = "q_evolve_1", Name = "Evolutionist", Description = "Evolve 1 Brainrot in the Laboratory.", Category = "Mutation", Event = "evolve", Goal = 1, Reward = { Coins = 500, Gems = 10, XP = 150, EventTokens = 5 } },
+	{ Id = "q_evolve_3", Name = "Evolution Master", Description = "Evolve 3 Brainrots in the Laboratory.", Category = "Mutation", Event = "evolve", Goal = 3, Reward = { Coins = 1500, Gems = 25, XP = 400, EventTokens = 10 } },
+	{ Id = "q_fuse_5", Name = "Fusion Expert", Description = "Fuse 5 pairs of Brainrots.", Category = "Mutation", Event = "fuse", Goal = 5, Reward = { Coins = 750, Gems = 15, XP = 200, EventTokens = 10 } },
+	{ Id = "q_trait_5", Name = "Trait Master", Description = "Upgrade Brainrot traits 5 times in the Laboratory.", Category = "Mutation", Event = "trait_upgrade", Goal = 5, Reward = { Coins = 750, Gems = 15, XP = 200, EventTokens = 10 } },
+	-- Survival, extra (v1.1) ----------------------------------------------
+	{ Id = "q_survive_10", Name = "Tide Veteran", Description = "Survive 10 Glitch Tides.", Category = "Survival", Event = "survive_tide", Goal = 10, Reward = { Coins = 1000, Gems = 20, XP = 300, EventTokens = 10 } },
+	{ Id = "q_survive_flawless", Name = "Flawless", Description = "Survive a Glitch Tide without being hit once.", Category = "Event", Event = "survive_flawless", Goal = 1, Reward = { Coins = 750, Gems = 15, XP = 200, EventTokens = 10 } },
+	{ Id = "q_survive_boss_tide", Name = "Boss Tide Survivor", Description = "Survive a Giant Boss tide.", Category = "Event", Event = "survive_boss_tide", Goal = 1, Reward = { Coins = 1000, Gems = 25, XP = 300, EventTokens = 10 } },
+	-- Boss, extra (v1.1) ----------------------------------------------------
+	{ Id = "q_defeat_colossus", Name = "Colossus Crusher", Description = "Defeat THE GLITCH COLOSSUS.", Category = "Combat", Event = "defeat_boss_colossus", Goal = 1, Reward = { Coins = 1500, Gems = 50, XP = 400, EventTokens = 20 } },
+	{ Id = "q_defeat_void", Name = "Void Vanquisher", Description = "Defeat THE VOID EMPEROR.", Category = "Combat", Event = "defeat_boss_void_emperor", Goal = 1, Reward = { Coins = 2000, Gems = 75, XP = 500, EventTokens = 25 } },
+	{ Id = "q_boss_fights_5", Name = "Boss Regular", Description = "Take part in 5 boss fights.", Category = "Combat", Event = "boss_participate", Goal = 5, Reward = { Coins = 1000, Gems = 25, XP = 300, EventTokens = 15 } },
+	-- Combat / Raid, extra (v1.1) -------------------------------------------
+	{ Id = "q_defeat_25", Name = "NPC Exterminator", Description = "Defeat 25 NPC Brainrots.", Category = "Combat", Event = "defeat_npc", Goal = 25, Reward = { Coins = 750, Gems = 20, XP = 250, EventTokens = 10 } },
+	{ Id = "q_defend_3", Name = "Fortress", Description = "Stop 3 theft attempts against your base.", Category = "Raid", Event = "defend_success", Goal = 3, Reward = { Coins = 750, Gems = 15, XP = 200, EventTokens = 10 } },
+	-- Expedition (v1.1) -------------------------------------------------------
+	{ Id = "q_expedition_1", Name = "First Expedition", Description = "Complete 1 expedition.", Category = "Expedition", Event = "complete_expedition", Goal = 1, Reward = { Coins = 300, Gems = 10, XP = 100, EventTokens = 5 } },
+	{ Id = "q_expedition_5", Name = "Expedition Veteran", Description = "Complete 5 expeditions.", Category = "Expedition", Event = "complete_expedition", Goal = 5, Reward = { Coins = 1000, Gems = 25, XP = 300, EventTokens = 10 } },
+	-- Territory (v1.1) ---------------------------------------------------------
+	{ Id = "q_territory_1", Name = "Land Grabber", Description = "Capture 1 territory.", Category = "Territory", Event = "capture_territory", Goal = 1, Reward = { Coins = 300, Gems = 10, XP = 100, EventTokens = 5 } },
+	{ Id = "q_territory_5", Name = "Territory Lord", Description = "Capture 5 territories.", Category = "Territory", Event = "capture_territory", Goal = 5, Reward = { Coins = 1000, Gems = 25, XP = 300, EventTokens = 10 } },
+	-- Dimension (v1.1) -----------------------------------------------------------
+	{ Id = "q_chest_3", Name = "Treasure Hunter", Description = "Open 3 dimension treasure chests.", Category = "Dimension", Event = "open_chest", Goal = 3, Reward = { Coins = 500, Gems = 15, XP = 150, EventTokens = 5 } },
+	{ Id = "q_checkpoint_1", Name = "Sky Runner", Description = "Complete the Skyfall checkpoint run.", Category = "Dimension", Event = "complete_checkpoint", Goal = 1, Reward = { Coins = 500, Gems = 15, XP = 150, EventTokens = 5 } },
+	-- Event, extra (v1.1) ---------------------------------------------------------
+	{ Id = "q_event_3", Name = "Event Regular", Description = "Take part in 3 events.", Category = "Event", Event = "participate_event", Goal = 3, Reward = { Coins = 500, Gems = 15, XP = 150, EventTokens = 10 } },
 }
 
 local _byId: { [string]: QuestDef } = {}
@@ -180,8 +242,14 @@ local function todayString(): string
 	return os.date("%Y-%m-%d") :: string
 end
 
+-- ISO week string ("2026-W47"): weekly quests reset when it rolls.
+local function weekString(): string
+	return os.date("%Y-W%W") :: string
+end
+
 -- ensureQuests(player): create data.Quests when missing and reset Daily
--- quests when the calendar day rolled over.
+-- quests when the calendar day rolled over, Weekly quests when the ISO
+-- week rolled over.
 local function ensureQuests(player: Player): any
 	local data = getData(player)
 	if not data then
@@ -194,6 +262,14 @@ local function ensureQuests(player: Player): any
 		data.QuestDay = todayString()
 		for _, quest in ipairs(QUESTS) do
 			if quest.Category == "Daily" then
+				data.Quests[quest.Id] = { Progress = 0, Claimed = false }
+			end
+		end
+	end
+	if data.QuestWeek ~= weekString() then
+		data.QuestWeek = weekString()
+		for _, quest in ipairs(QUESTS) do
+			if quest.Category == "Weekly" then
 				data.Quests[quest.Id] = { Progress = 0, Claimed = false }
 			end
 		end
@@ -252,6 +328,8 @@ end
 -- to `eventName`. GameManager / other services call this on buy, place,
 -- steal, defend, mutate, fuse, NPC defeat, boss defeat, tide survival
 -- and zone visits. Amount defaults to 1; progress clamps at the goal.
+-- A quest with Requires only progresses once its prerequisite quest
+-- has been CLAIMED (story chains).
 function QuestService.RecordEvent(player: Player, eventName: any, amount: any)
 	if not player or not player:IsA("Player") then
 		return
@@ -267,6 +345,12 @@ function QuestService.RecordEvent(player: Player, eventName: any, amount: any)
 	local changed = false
 	for _, quest in ipairs(QUESTS) do
 		if quest.Event == eventName then
+			if quest.Requires ~= nil then
+				local prereq = data.Quests[quest.Requires]
+				if type(prereq) ~= "table" or prereq.Claimed ~= true then
+					continue
+				end
+			end
 			local state = data.Quests[quest.Id]
 			local before = tonumber(state.Progress) or 0
 			local after = math.min(quest.Goal, before + delta)
@@ -282,8 +366,159 @@ function QuestService.RecordEvent(player: Player, eventName: any, amount: any)
 			end
 		end
 	end
+	-- Forward to achievements / challenges exactly once per event
+	-- (not per quest — several quests can share one event). Runs even
+	-- when no quest progressed: achievements have their own goals.
+	forwardProgress(player, eventName, delta)
 	if changed then
 		pushProgress(player)
+	end
+end
+
+-- EVENT_KIND_MAP: which achievement / challenge kind a quest event
+-- also advances. This is the SINGLE funnel: RecordEvent is the only
+-- place that forwards to achievements / challenges, so a tide that
+-- fires both survive_tide AND survive_meteor_tide still counts ONCE
+-- toward tide_survived (only survive_tide maps to it; the variant
+-- events are quest-only). ReportProgress maps kind/id -> events and
+-- calls RecordEvent, so it can never double-count either.
+local EVENT_KIND_MAP: { [string]: string } = {
+	survive_tide = "tide_survived",
+	survive_flawless = "tide_flawless",
+	defeat_boss = "boss_defeated",
+	boss_participate = "boss_participated",
+	fuse = "fusion",
+	mutate = "mutation",
+	evolve = "evolution",
+	trait_upgrade = "trait",
+	complete_expedition = "expedition",
+	discover_secret = "secret",
+	capture_territory = "territory",
+	participate_event = "event",
+	buy_brainrot = "first_buy",
+	place_brainrot = "first_place",
+}
+
+local function forwardProgress(player: Player, eventName: string, delta: number)
+	local kind = EVENT_KIND_MAP[eventName]
+	if kind == nil then
+		return
+	end
+	if _achievementService and type(_achievementService.CheckProgress) == "function" then
+		pcall(function()
+			_achievementService.CheckProgress(player, kind, delta)
+		end)
+	end
+	if _progressionService and type(_progressionService.CheckChallenge) == "function" then
+		pcall(function()
+			_progressionService.CheckChallenge(player, kind, delta)
+		end)
+	end
+end
+
+-- REPORT_PROGRESS_MAP: the v1.1 canonical hook taxonomy. ReportProgress
+-- (player, kind, id, amount) maps a progress kind + detail id to the
+-- quest Event names it advances, then calls RecordEvent for each —
+-- RecordEvent is the funnel that also forwards to achievements and
+-- challenges (see EVENT_KIND_MAP). `kind` uses the SAME strings as
+-- AchievementService.CheckProgress and ProgressionService.CheckChallenge
+-- (tide_survived, boss_defeated, fusion, ...) so one call updates
+-- quests, achievements and challenges together. Kinds with no quest
+-- event (collection, level) map to an empty list; for those two, the
+-- `amount` is an ABSOLUTE value (total distinct / current level) and
+-- is sent to AchievementService.SetProgress instead.
+local REPORT_PROGRESS_MAP: { [string]: { [string]: { string } } } = {
+	tide_survived = {
+		survive = { "survive_tide" },
+		Meteor = { "survive_meteor_tide" },
+		GiantBoss = { "survive_boss_tide" },
+	},
+	tide_flawless = {
+		flawless = { "survive_flawless" },
+	},
+	boss_defeated = {
+		defeat_boss = { "defeat_boss" },
+		defeat_boss_colossus = { "defeat_boss", "defeat_boss_colossus" },
+		defeat_boss_void_emperor = { "defeat_boss", "defeat_boss_void_emperor" },
+	},
+	boss_participated = {
+		participate = { "boss_participate" },
+	},
+	boss_top_damage = {},
+	fusion = {
+		fuse = { "fuse" },
+	},
+	mutation = {
+		mutate = { "mutate" },
+	},
+	evolution = {
+		evolve = { "evolve" },
+	},
+	trait = {
+		upgrade = { "trait_upgrade" },
+		alternate_form = { "trait_upgrade" },
+	},
+	expedition = {
+		complete = { "complete_expedition" },
+	},
+	secret = {
+		discover = { "discover_secret" },
+		recipe = { "discover_secret" },
+	},
+	territory = {
+		capture = { "capture_territory" },
+	},
+	dimension = {
+		visit_abyssal = { "visit_abyssal" },
+		visit_skyfall = { "visit_skyfall" },
+		chest = { "open_chest" },
+		checkpoint = { "complete_checkpoint" },
+	},
+	event = {
+		participate = { "participate_event" },
+	},
+	collection = {},
+	level = {},
+	rebirth = {},
+	prestige = {},
+	first_buy = {},
+	first_place = {},
+}
+
+-- ReportProgress(player, kind, id, amount): the v1.1 canonical
+-- progress hook. Called by TideService / BossService /
+-- DimensionsService / EventService (1-3 line hook calls) and by the
+-- Wave 2 services (Laboratory / Expedition / Territory / Secret).
+-- Advances the mapped quest events via RecordEvent (which also
+-- forwards to achievements / challenges exactly once). Unknown kinds
+-- / ids are harmless no-ops for quests. For the absolute kinds
+-- "level" / "collection", `amount` is the absolute value and is sent
+-- to AchievementService.SetProgress.
+function QuestService.ReportProgress(player: Player, kind: any, id: any, amount: any)
+	if not player or not player:IsA("Player") then
+		return
+	end
+	if type(kind) ~= "string" or kind == "" then
+		return
+	end
+	local detail = type(id) == "string" and id or "default"
+	local delta = math.max(0, math.floor(tonumber(amount) or 1))
+	if kind == "level" or kind == "collection" then
+		if _achievementService and type(_achievementService.SetProgress) == "function" then
+			pcall(function()
+				_achievementService.SetProgress(player, kind, delta)
+			end)
+		end
+		return
+	end
+	local byId = REPORT_PROGRESS_MAP[kind]
+	if byId ~= nil then
+		local events = byId[detail]
+		if events ~= nil then
+			for _, eventName in ipairs(events) do
+				QuestService.RecordEvent(player, eventName, delta)
+			end
+		end
 	end
 end
 
@@ -376,6 +611,17 @@ function QuestService.SetProgressionService(progressionService: any)
 	end
 end
 
+-- SetAchievementService: AchievementService.Init calls this itself
+-- (it takes QuestService as its 2nd Init argument), and
+-- GameManager.wireCrossLinks calls it when the setter name is added
+-- to its shared table. Until then, achievement forwarding is skipped
+-- (quests still work).
+function QuestService.SetAchievementService(achievementService: any)
+	if achievementService and type(achievementService.CheckProgress) == "function" then
+		_achievementService = achievementService
+	end
+end
+
 local function onClaim(player: Player, payload: any)
 	if not player or not player:IsA("Player") then
 		return
@@ -457,6 +703,15 @@ function QuestService.Init(dataService: any)
 		local lab = zoneCenter("MutationLab")
 		if lab and (pos - lab).Magnitude <= 20 then
 			QuestService.RecordEvent(player, "visit_lab", 1)
+		end
+		-- v1.1 dimensions (fixed coordinates from Dimensions.luau —
+		-- Abyssal spawn (-150, 3, 136), Skyfall main island
+		-- (150, 46, -140)). Position-based, same pattern as rift/lab.
+		if (pos - Vector3.new(-150, 3, 136)).Magnitude <= 20 then
+			QuestService.RecordEvent(player, "visit_abyssal", 1)
+		end
+		if (pos - Vector3.new(150, 46, -140)).Magnitude <= 20 then
+			QuestService.RecordEvent(player, "visit_skyfall", 1)
 		end
 	end
 

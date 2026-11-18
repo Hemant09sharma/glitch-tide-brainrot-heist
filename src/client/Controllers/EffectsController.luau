@@ -491,28 +491,63 @@ end
 -- GlitchTideUpdate payload: a table { phase: string, secondsRemaining: number?, ... }
 -- or (phase: string, secondsRemaining: number).
 -- phase: "warning" | "countdown" | "active" | "ended"
+-- WAVE 3 (v1.1 E) FIX: the server (TideService, v1.1 D) sends CAPITAL keys
+-- {Phase="Warning"|"Active"|"Calm"|"Idle", TimeLeft=..., Stage=...,
+-- StageName=..., Announcement=...} — the old handler only read the
+-- lowercase `phase` key and compared case-sensitively, so it matched
+-- NOTHING the server actually sends and the tide visuals never ran.
+-- This handler now reads Phase or phase, lowercases it, and also reacts
+-- to Stage 3 (sirens) via SoundController.
 local function onGlitchTideUpdate(phaseOrData: any, secondsRemaining: number?)
 	local phase: string? = nil
 	local seconds: number? = secondsRemaining
+	local stage: number? = nil
+	local stageName: string? = nil
 	if typeof(phaseOrData) == "table" then
-		if typeof(phaseOrData.phase) == "string" then
-			phase = phaseOrData.phase
+		local rawPhase = phaseOrData.Phase or phaseOrData.phase
+		if typeof(rawPhase) == "string" then
+			phase = string.lower(rawPhase)
 		end
-		if typeof(phaseOrData.secondsRemaining) == "number" then
+		if typeof(phaseOrData.TimeLeft) == "number" then
+			seconds = phaseOrData.TimeLeft
+		elseif typeof(phaseOrData.SecondsLeft) == "number" then
+			seconds = phaseOrData.SecondsLeft
+		elseif typeof(phaseOrData.secondsRemaining) == "number" then
 			seconds = phaseOrData.secondsRemaining
 		end
+		if typeof(phaseOrData.Stage) == "number" then
+			stage = phaseOrData.Stage
+		end
+		if typeof(phaseOrData.StageName) == "string" then
+			stageName = phaseOrData.StageName
+		end
 	elseif typeof(phaseOrData) == "string" then
-		phase = phaseOrData
+		phase = string.lower(phaseOrData)
 	end
+	-- Stage 3 is the siren stage (TideService.broadcastStage): play the
+	-- siren cue + a shake even before the "active" phase arrives.
+	if stage == 3 then
+		pcall(function()
+			local mod = script.Parent:FindFirstChild("SoundController")
+			if mod then
+				local sound = require(mod)
+				if sound.PlaySiren then
+					sound.PlaySiren()
+				end
+			end
+		end)
+		addTrauma(0.3)
+	end
+	_ = stageName
 	if phase == "warning" or phase == "countdown" then
 		-- Warning only: light distortion, no full color shift yet.
 		EffectsController.SetGlitchActive(false)
 		hitFlash(Color3.fromRGB(190, 90, 255), 0.2)
 		_ = seconds
-	elseif phase == "active" then
+	elseif phase == "active" or phase == "tide" then
 		EffectsController.SetGlitchActive(true)
 		addTrauma(0.4)
-	elseif phase == "ended" then
+	elseif phase == "ended" or phase == "calm" or phase == "idle" then
 		EffectsController.SetGlitchActive(false)
 		spawnPoof(player.Character and (player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?) and (player.Character:FindFirstChild("HumanoidRootPart") :: BasePart).Position or Vector3.new(0, 5, 0))
 	end
@@ -521,10 +556,122 @@ end
 -- ---------------------------------------------------------------------------
 -- Remote handlers.
 -- ---------------------------------------------------------------------------
+-- SpawnEffect payload — TWO forms, both accepted (Wave 3 v1.1 E fix for
+-- audit §3 F1 / QA_V11_B §4: the handler only spoke positional, the
+-- servers mostly speak table, so most server FX was a silent no-op):
+--   POSITIONAL (B/C new fires): (effectType: string, position: Vector3, extra: any)
+--   TABLE (pre-existing fires from AbilityService / CombatService /
+--     BossService / ProgressionService / TideService): a single table
+--     {type="Power"|"BossShockwave"|"TideSiren"|..., position=Vector3,
+--     radius=..., color=..., player=..., bossId=..., ...}
+-- Table types are mapped to the same visuals the positional form uses;
+-- an unknown table type with a position still gets a particle burst so
+-- a new server effect type degrades to *something visible* instead of
+-- nothing. Table fires with no position (counts-only payloads such as
+-- {type="ToxicPools", count=3}) are intentionally ignored — there is
+-- nowhere to draw them.
+local function tableEffectColor(typeName: string): Color3
+	if string.find(typeName, "Boss") == 1 or string.find(typeName, "Void") == 1 then
+		return Color3.fromRGB(170, 60, 255)
+	elseif string.find(typeName, "Tide") == 1 then
+		return Color3.fromRGB(190, 90, 255)
+	elseif string.find(typeName, "Meteor") == 1 or string.find(typeName, "Starfall") == 1 then
+		return Color3.fromRGB(255, 150, 60)
+	elseif string.find(typeName, "Toxic") == 1 then
+		return Color3.fromRGB(90, 255, 90)
+	elseif string.find(typeName, "Glitch") == 1 then
+		return Color3.fromRGB(90, 255, 160)
+	end
+	return Color3.fromRGB(120, 180, 255)
+end
+
+local function onSpawnEffectTable(payload: any)
+	if typeof(payload) ~= "table" then
+		return
+	end
+	local typeName = payload.type or payload.Type or payload.Effect or ""
+	if typeof(typeName) ~= "string" or typeName == "" then
+		return
+	end
+	local position = payload.position or payload.Position
+	if typeof(position) ~= "Vector3" then
+		-- Count-only / announcement-only table fires (e.g. ToxicPools
+		-- {count=3}, TideShelters {count=3}): nothing to draw here.
+		return
+	end
+	local color: Color3 = tableEffectColor(typeName)
+	if typeof(payload.color) == "Color3" then
+		color = payload.color
+	end
+	local radius = 8
+	if typeof(payload.radius) == "number" then
+		radius = payload.radius
+	elseif typeof(payload.Radius) == "number" then
+		radius = payload.Radius
+	end
+	if typeName == "TideSiren" then
+		-- Siren stage: flash + shake; the siren SOUND is played by
+		-- the GlitchTideUpdate stage-3 branch (no double cue).
+		hitFlash(Color3.fromRGB(190, 90, 255), 0.3)
+		addTrauma(0.4)
+		return
+	end
+	if typeName == "TideClimax" or typeName == "BossGlitchNova" or typeName == "BossVoidNova" then
+		spawnAoERing(position, math.max(radius, 14), color)
+		hitFlash(color, 0.3)
+		addTrauma(0.5)
+		return
+	end
+	if typeName == "BossShockwave" or typeName == "BossVoidZone" or typeName == "BossVoidBolt" then
+		spawnAoERing(position, radius, color)
+		spawnParticles(position, "ability", 16)
+		addTrauma(0.3)
+		return
+	end
+	if typeName == "BossTeleport" or typeName == "BossTeleportArrive" or typeName == "GlitchTeleport" then
+		spawnGlitchPadSparkles(position)
+		spawnPoof(position)
+		return
+	end
+	if typeName == "SecretEncounter" or typeName == "Starfall" or typeName == "MeteorFallout" then
+		spawnAoERing(position, radius, color)
+		spawnParticles(position, "coin", 18)
+		return
+	end
+	if typeName == "TideSurf" or typeName == "GlitchTeleport" then
+		spawnGlitchPadSparkles(position)
+		return
+	end
+	if typeName == "Power" or typeName == "Ability" then
+		-- Character power / ability fire: ring in the power colour +
+		-- flash. The payload's `player` field is the caster's name.
+		spawnAoERing(position, radius, color)
+		hitFlash(color, 0.2)
+		return
+	end
+	-- Generic fallback for any other table type with a position:
+	-- a ring + burst in the type's colour, so new server effects are
+	-- visible instead of silently dropped.
+	spawnAoERing(position, radius, color)
+	spawnParticles(position, "ability", 12)
+end
+
 -- SpawnEffect payload: (effectType: string, position: Vector3, extra: any)
 -- effectType: "hit" | "ko" | "heal" | "ability" | "coin" | "poof" | "wave" |
 --   "ring" | "flash" | "shake"
+-- A single TABLE argument is the table form (see above) and is routed
+-- to onSpawnEffectTable.
 local function onSpawnEffect(effectType: string, position: Vector3, extra: any)
+	if typeof(effectType) == "table" then
+		onSpawnEffectTable(effectType)
+		return
+	end
+	if typeof(effectType) ~= "string" then
+		return
+	end
+	if typeof(position) ~= "Vector3" then
+		return
+	end
 	if effectType == "shake" then
 		local amount = 0.35
 		if typeof(extra) == "number" then
@@ -598,9 +745,44 @@ local function onSpawnEffect(effectType: string, position: Vector3, extra: any)
 	spawnParticles(position, effectType, 14)
 end
 
--- DamageNumber payload: (position: Vector3, amount: number, isCrit: boolean, isHeal: boolean)
-local function onDamageNumber(position: Vector3, amount: number, isCrit: boolean, isHeal: boolean)
-	spawnDamageNumber(position, amount, isCrit, isHeal)
+-- DamageNumber payload — TWO forms (Wave 3 v1.1 E fix; same mismatch as
+-- SpawnEffect): the server (CombatService) fires a single TABLE
+-- {target=Vector3, amount=number, isCrit=bool, isHeal=bool}, but the old
+-- handler only spoke positional (position, amount, isCrit, isHeal) and
+-- the HUD listener expected (targetPlayer, amount). The table form
+-- crashed spawnDamageNumber (CFrame.new(table)) or silently did
+-- nothing. Both forms are now accepted. The server only fires
+-- DamageNumber at the attacker / victim, so any received number is
+-- for the local player.
+-- OPTIMIZATION: at most 40 live damage-number anchors; beyond that a
+-- new number is dropped instead of spawning unbounded GUI/parts in a
+-- big fight.
+local _liveDamageNumbers = 0
+
+local function onDamageNumber(a: any, amount: any, isCrit: any, isHeal: any)
+	if _liveDamageNumbers >= 40 then
+		return
+	end
+	if typeof(a) == "table" then
+		local position = a.target or a.Position or a.position
+		if typeof(position) ~= "Vector3" then
+			return
+		end
+		local n = tonumber(a.amount) or 0
+		_liveDamageNumbers += 1
+		spawnDamageNumber(position, n, a.isCrit == true, a.isHeal == true)
+		task.delay(1.0, function()
+			_liveDamageNumbers = math.max(0, _liveDamageNumbers - 1)
+		end)
+		return
+	end
+	if typeof(a) == "Vector3" and typeof(amount) == "number" then
+		_liveDamageNumbers += 1
+		spawnDamageNumber(a, amount, isCrit == true, isHeal == true)
+		task.delay(1.0, function()
+			_liveDamageNumbers = math.max(0, _liveDamageNumbers - 1)
+		end)
+	end
 end
 
 function EffectsController.Init()

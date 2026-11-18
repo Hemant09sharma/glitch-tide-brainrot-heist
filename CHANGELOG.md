@@ -3,6 +3,103 @@
 All notable changes to this project are documented here.
 Versioning follows Semantic Versioning (MAJOR.MINOR.PATCH).
 
+## [1.1.0] — 2026-11-19 — EXTREME EXPANSION
+
+`Config.GameVersion` bumped to 1.1.0. 68 Luau files, 42,045 lines
+(was 48 files / 26,062 lines in v1.0.2). All v1.0.2 fixes preserved.
+No Studio playtest was run — every new feature is classified per the
+Part 16 policy in `FEATURE_CHECKLIST.md` and `QA_TEST_REPORT.md` §9–§13;
+nothing new here is "Fully implemented and tested" (that status requires
+a Studio run).
+
+- **Visual overhaul (Part 2):** `MapBuilder` rewritten (615 → 1,189
+  lines, 575 parts, 16 lights): distinct architecture, elevation, and
+  landmarks per region; new `LightingService` (12 moods, 2.5 s tweened
+  transitions) and `EnvironmentService` (one Heartbeat loop, ~30
+  animated elements). `docs/SHOT_LIST.md` documents 4 photographable
+  compositions.
+- **Brainrots (Part 3):** roster 18 → 27 (one new character per tier
+  Common–Secret: Phantom Pancake, Prism Penguin, Neon Narwhal, Reactor
+  Raccoon, Gravity Goblin, Thunder Tortoise, Quantum Quokka, Solar
+  Sloth, Void Vulture). All 27 models rebuilt with distinct silhouettes
+  and rarity presentation; `AnimationController` expanded to per-character
+  idle/walk/run/jump/land/dance/celebrate/attack/damage/rare-discovery
+  sets (procedural tween/bob — still no keyframed animation). 3 new
+  synergies (13 total). Companion abilities on 15 characters, all 6
+  bonuses now wired end-to-end (income, tide protection, carry speed,
+  mutation bonus, rare detection, raid detection).
+- **New regions (Part 4):** Abyssal Kingdom (sunken basin, 3 treasure
+  chests, currents, boss altar) and Skyfall Kingdom (4 floating islands,
+  4-checkpoint timed run, wind hazards, hidden SkyCache chest), via
+  `DimensionsService` + shared `Dimensions.luau`; server-validated
+  teleports, level gates (Abyssal L5, Skyfall L15), exclusive Brainrots
+  (`puddle_professor`, `moon_mochi`).
+- **Glitch Tide (Part 5):** 10-stage cinematic anticipation; all 10
+  variants now working (Double/Dark/GiantBoss promoted out of data-only;
+  `Config.TideVariationsDisabled` deleted); escape routes, 3 temporary
+  shelters, 4 moving channel obstacles, risk zones, tide surfing,
+  glitch barriers (Corrupted), low gravity (Cosmic), tide-exclusive
+  conveyor spawns, flawless-survival Secret/Divine grant, co-op survival
+  rewards, secret-encounter roll.
+- **New systems (Part 6):** Brainrot Laboratory (Evolve, trait upgrades
+  to level 3, 3 secret recipes, 11 alternate forms),
+  Expeditions (6, 60 s–1800 s, risk reduces rewards, Brainrot never
+  lost), Territory Control (7 capturable locations, 10 s channel,
+  contested freeze, 60 s cooldown, flat-tick bonus by design),
+  Secret Discovery (5 secrets, hidden merchant, 3-rune puzzle room),
+  Achievements module (24 achievements, 13 titles).
+- **Progression (Part 7):** prestige (past 10 rebirths), level
+  milestones 15/20/30/40/50/75/100, collection milestones 10/15/20/27,
+  8 challenges, rare-character mastery (Rare+, +1% income per tier to
+  +3%), rebirth income contradiction fixed (single source: +10% per
+  rebirth, +5% per prestige), banked-income cap now scales
+  (`100,000 + 5,000/level + 10,000/rebirth + 25,000/prestige`).
+- **Quests (Part 8):** 16 → 54 (story chain of 5 via new `Requires`
+  field; daily 3 + weekly 3 with ISO-week reset; exploration, secret,
+  collection, mutation, survival, boss, combat, raid/defense,
+  expedition, territory, dimension, event). Single-funnel progress:
+  `QuestService.RecordEvent` forwards to achievements/challenges.
+- **Bosses + combat (Part 9):** THE GLITCH COLOSSUS (7,500 HP) and
+  THE VOID EMPEROR (9,000 HP), both 3-phase with telegraphs, scaling
+  (+10% per extra player, cap 2×), co-op rewards; THE ALGORITHM
+  unchanged (5,000 HP, unscaled). Every 10th wave summons a real boss;
+  no wave starts mid-tide.
+- **Powers (Part 10):** 5 new playable powers, fully wired in
+  `AbilityService` (Time Rewind 20 s, Meteor Shower 18 s, Void Dash
+  10 s, Gravity Crush 22 s, Dimensional Prison 25 s); power mastery
+  (+10 XP/use, levels 0–5, +5% damage / −2% cooldown per level,
+  floored at 3 s). Keybinds unchanged (Q/F/R/E/G, 1/2/3).
+- **UI (Part 11):** 6 new panels (Dimension/Worlds, Laboratory,
+  Expedition, Territory, Achievement+Titles, plus HUD boss bar / tide
+  stage line / title slot / death & victory screens / welcome banner /
+  2nd menu row); MainMenu two-column layout; quests grouped by
+  category; collection fixed to X/27. No decorative nonfunctional UI —
+  every button has a handler.
+- **Sound (Part 12):** 34 verified `rbxasset://sounds/...` cues
+  (pcall-guarded, client-local, Master/SFX/Music steppers); 5 slots
+  deliberately unassigned (no invented IDs). `SoundHook` wired.
+- **Multiplayer (Part 13):** dead paths fixed — Attack firer
+  (left-click + touch, 0.45 s cooldown), StealBrainrot firer (cached
+  plot scan, 60 s per-victim cooldown, 5 s watchdog),
+  `RequestCollection` / `RequestEvents` now invoked by clients,
+  `BossUpdate` listener in HUD, `EquipTitle` server handler wired.
+  `UsePower` / `SettingsUpdate` / `SynergyUpdate` stay unwired by
+  documented decision (see `docs/REMOTES_WIRED_E.md`).
+- **Engineering (Part 15):** 9 new services registered in `GameManager`
+  (`OPTIONAL_SERVICES` + explicit `loadOptional` branches where
+  signatures differ); `wireCrossLinks` extended; companion hooks in
+  GameManager/CarryService/BaseService/ConveyorService/RaidService;
+  stale Utils slam-"E" comment fixed; dead 5 s PlayerStats poll and
+  5 dead remote fires removed.
+- **Verification (Part 17):** `luau-compile` 68/68; Python harness
+  extended 50 → 70 checks (all pass); Lune harness extended 33 → 40
+  checks (all pass); Rojo build twice, byte-identical
+  (SHA-256 `40f0cf4fd5bdf630687ebd4d3f0f9ae5ef849894697ebc3d6e4d27933d1b3af0`,
+  558,606 bytes); source-to-place byte matching 68/68
+  (`scripts/verify-rbxl.py`); hierarchy re-verified via Rojo's
+  `/show-instances` tree (StarterGui → MainMenu once;
+  StarterPlayerScripts → Main + Controllers; Workspace empty).
+
 ## [1.0.2] — 2026-11-18
 
 Packaging correction only — no gameplay changes, all v1.0.1 fixes

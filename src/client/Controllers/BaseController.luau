@@ -4,12 +4,17 @@
 -- Collect button (CollectIncome), slots used/total, upgrade buttons
 -- (UpgradeBase), the placed-Brainrots list, a Rebirth button (Rebirth
 -- remote, {Action="Rebirth"}; requirements shown from
--- Config.RebirthRequirements), and the steal-alert banner.
+-- Config.RebirthRequirements), a Prestige button (same remote,
+-- {Action="Prestige"}; documented requirements, server-validated),
+-- and the steal-alert banner.
 -- State comes from BaseUpdate pushes and RequestBase (RemoteFunction);
 -- every action is a server-validated request, and results are only shown
 -- when the server pushes back. Toggle: V key, or the "BASE" button on
 -- the HUD menu bar. StealAlert shows a red banner + alarm sound + a
--- "Return to base" hint for 8 seconds.
+-- "Return to base" hint for 8 seconds. Wave 3 (v1.1 E) fixed the
+-- StealAlert parsing (the real payload is {Thief, ThiefUserId,
+-- Victim, CharacterId, Phase}) and removed the dead FireServer
+-- ("GetBase") branch — RequestBase is a function, not an event.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -290,6 +295,28 @@ function BaseController.Rebirth()
 	end)
 end
 
+-- Prestige (v1.1 E, Workstream C): the endgame reset on the same
+-- Rebirth remote, envelope {Action="Prestige"}. Requirements are
+-- documented in QA_V11_C §2 Part 7 (10 rebirths, Level 25, 250,000
+-- coins, 15 distinct Brainrots); the server re-validates them, so
+-- the client shows them and lets the server answer. Grants +50 gems,
+-- the title_prestiged title, +5% income/rank.
+function BaseController.Prestige()
+	local remote = getRemote(remoteName("Rebirth", "Rebirth"))
+	if not remote or not remote:IsA("RemoteEvent") then
+		setStatus("Rebirth remote is not available yet.", true)
+		return
+	end
+	setStatus("Requesting prestige — the server checks the requirements…")
+	playSound("upgrade")
+	pcall(function()
+		(remote :: RemoteEvent):FireServer({ Action = "Prestige" })
+	end)
+	task.delay(5, function()
+		BaseController.RefreshFromServer()
+	end)
+end
+
 function BaseController.Collect()
 	local remote = getRemote(remoteName("CollectIncome", "CollectIncome"))
 	if not remote or not remote:IsA("RemoteEvent") then
@@ -322,31 +349,72 @@ function BaseController.RefreshFromServer()
 				setStatus("Could not load base data from the server.", true)
 			end
 		end)
-	elseif baseFn and baseFn:IsA("RemoteEvent") then
-		pcall(function()
-			(baseFn :: RemoteEvent):FireServer("GetBase")
-		end)
+	else
+		-- WAVE 3 (v1.1 E) FIX: the old elseif branch fired "GetBase"
+		-- on RequestBase as a RemoteEvent — RequestBase is a
+		-- RemoteFunction and has no event handler, so the fire was
+		-- dead (audit F1). Removed, not replaced.
+		setStatus("RequestBase remote is not available yet.", true)
 	end
 end
 
--- StealAlert payload: {ThiefName=..., CharacterName=..., ...} or strings.
+-- StealAlert ACTUAL payload (v1.1 E fix — the old parsing read
+-- ThiefName / CharacterName / BrainrotName / Name, none of which
+-- exist, so the banner always showed "Someone" / "a Brainrot"):
+--   {Thief, ThiefUserId, Victim, CharacterId, Phase}
+--   Phase = Started | Success | Failed | Returned | Delivered
+-- plus a Lockdown variant {Victim, Phase="Lockdown", Duration}.
+-- This banner is the VICTIM side (Victim == LocalPlayer). The thief
+-- side is handled by InteractionController.ApplyStealAlert.
 function BaseController.ShowStealAlert(payload: any)
-	local thief = "Someone"
-	local what = "a Brainrot"
-	if typeof(payload) == "table" then
-		thief = tostring(payload.ThiefName or payload.thief or payload.PlayerName or thief)
-		what = tostring(payload.CharacterName or payload.BrainrotName or payload.Name or what)
-	elseif typeof(payload) == "string" then
-		what = payload
+	if typeof(payload) ~= "table" then
+		return
 	end
-	if stealLabel then
-		stealLabel.Text = "⚠ " .. thief .. " is stealing " .. what .. " from your base!  •  Return to base!"
+	local phase = tostring(payload.Phase or "")
+	local victim = tostring(payload.Victim or "")
+	if victim ~= "" and victim ~= LocalPlayer.Name then
+		-- Not our base — the thief-side prompt lives in
+		-- InteractionController; this banner is victim-only.
+		return
+	end
+	local thief = tostring(payload.Thief or "Someone")
+	local what = "a Brainrot"
+	local charId = payload.CharacterId
+	if typeof(charId) == "string" and Characters and Characters.GetById then
+		local ok, def = pcall(function()
+			return Characters.GetById(charId)
+		end)
+		if ok and def then
+			what = tostring(def.DisplayName or def.Name or charId)
+		end
+	end
+	if phase == "Lockdown" then
+		if stealLabel then
+			stealLabel.Text = "🔒 Your base is on lockdown for " .. tostring(payload.Duration or "?") .. "s!"
+		end
+		setStatus("Your base is on lockdown.", true)
+	elseif phase == "Started" then
+		if stealLabel then
+			stealLabel.Text = "⚠ " .. thief .. " is stealing " .. what .. " from your base!  •  Return to base!"
+		end
+		setStatus("Your base is being robbed — get back there!", true)
+	elseif phase == "Success" or phase == "Delivered" then
+		if stealLabel then
+			stealLabel.Text = "💀 " .. thief .. " stole " .. what .. " from your base!"
+		end
+		setStatus(thief .. " stole " .. what .. " from your base.", true)
+	elseif phase == "Failed" or phase == "Returned" then
+		if stealLabel then
+			stealLabel.Text = "✅ The steal of " .. what .. " was stopped!"
+		end
+		setStatus("The steal attempt was stopped.")
+	else
+		return
 	end
 	if stealBanner then
 		stealBanner.Visible = true
 	end
 	playSound("stealAlarm")
-	setStatus("Your base is being robbed — get back there!", true)
 	task.delay(8, function()
 		if stealBanner then
 			stealBanner.Visible = false
@@ -548,14 +616,39 @@ function BaseController.Init()
 		BaseController.Rebirth()
 	end)
 
+	-- Prestige row (v1.1 E): same Rebirth remote, {Action="Prestige"}.
+	-- Requirements are the documented ones (QA_V11_C §2 Part 7);
+	-- the server validates them and answers via RebirthUpdate.
+	local prestigeText = "Prestige: 10 rebirths  •  Lv 25  •  🪙 250,000  •  15 distinct Brainrots"
+		.. "  →  +50 💎, title_prestiged, +5% income/rank"
+	local prestigeLabel = makeLabel(panel, prestigeText, 11, Color3.fromRGB(255, 220, 120), true)
+	prestigeLabel.Size = UDim2.new(1, -170, 0, 30)
+	prestigeLabel.Position = UDim2.new(0, 16, 0, 236)
+	prestigeLabel.TextYAlignment = Enum.TextYAlignment.Top
+	local prestigeBtn = Instance.new("TextButton")
+	prestigeBtn.Name = "PrestigeButton"
+	prestigeBtn.Size = UDim2.new(0, 130, 0, 30)
+	prestigeBtn.Position = UDim2.new(1, -146, 0, 236)
+	prestigeBtn.Text = "👑 PRESTIGE"
+	prestigeBtn.Font = Enum.Font.GothamBold
+	prestigeBtn.TextSize = 13
+	prestigeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	prestigeBtn.BackgroundColor3 = Color3.fromRGB(200, 150, 30)
+	prestigeBtn.BorderSizePixel = 0
+	corner(prestigeBtn, 8)
+	prestigeBtn.Parent = panel
+	prestigeBtn.MouseButton1Click:Connect(function()
+		BaseController.Prestige()
+	end)
+
 	local placedTitle = makeLabel(panel, "Placed Brainrots:", 13, Color3.fromRGB(255, 255, 255), true)
 	placedTitle.Size = UDim2.new(1, -32, 0, 20)
-	placedTitle.Position = UDim2.new(0, 16, 0, 236)
+	placedTitle.Position = UDim2.new(0, 16, 0, 268)
 
 	placedFrame = Instance.new("ScrollingFrame")
 	placedFrame.Name = "PlacedList"
-	placedFrame.Size = UDim2.new(1, -24, 1, -266)
-	placedFrame.Position = UDim2.new(0, 12, 0, 258)
+	placedFrame.Size = UDim2.new(1, -24, 1, -298)
+	placedFrame.Position = UDim2.new(0, 12, 0, 290)
 	placedFrame.BackgroundTransparency = 1
 	placedFrame.BorderSizePixel = 0
 	placedFrame.ScrollBarThickness = 6
