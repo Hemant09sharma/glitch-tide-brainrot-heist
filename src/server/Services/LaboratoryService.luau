@@ -165,6 +165,27 @@ local function ensureLabData(player: Player): any
 	return data
 end
 
+
+-- R4-3: spendable balance — the raw balance minus any reservation
+-- held for a pending reward commit (DataService.ReserveCoins).
+-- Falls back to the raw balance when the DataService has no
+-- reservation API (older stub). Debits below go through
+-- DataService.AddCoins, which enforces the same floor as a
+-- backstop, so a reserved reward credit can never be spent here
+-- while its commit's save is in flight.
+local function spendableCoins(player: Player, data: any): number
+	local coins = tonumber(data.Coins) or 0
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, value = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(value) == "number" then
+			return value
+		end
+	end
+	return coins
+end
+
 -- resolveMutationService: prefer the injected service, else require
 -- the sibling module (same pattern as FusionService — GameManager's
 -- generic Init can pass the wrong positional argument).
@@ -391,6 +412,14 @@ function LaboratoryService.EvolveBrainrot(player: Player, instanceId: any): (boo
 	if inst.Placed == true then
 		return false, "instance must be unplaced (evolve from inventory)"
 	end
+	-- Theft / expedition integrity: a stolen in-transit instance or
+	-- an instance away on an expedition must not be evolved.
+	if inst.InTransit == true then
+		return false, "instance is in transit (stolen)"
+	end
+	if inst.OnExpedition == true then
+		return false, "instance is on an expedition"
+	end
 	if inst.Evolved == true then
 		return false, "already evolved"
 	end
@@ -408,7 +437,7 @@ function LaboratoryService.EvolveBrainrot(player: Player, instanceId: any): (boo
 		return false, "no data"
 	end
 	local cost = LabDefs.GetEvolveCost(def.Rarity)
-	local coins = tonumber(data.Coins) or 0
+	local coins = spendableCoins(player, data)
 	local crystals = tonumber(data.MutationCrystals) or 0
 	if coins < cost.Coins then
 		return false, "not enough coins (" .. tostring(cost.Coins) .. " needed)"
@@ -426,7 +455,7 @@ function LaboratoryService.EvolveBrainrot(player: Player, instanceId: any): (boo
 		useRecipe = secretRecipe
 	end
 
-	data.Coins = coins - cost.Coins
+	_dataService.AddCoins(player, -cost.Coins)
 	data.MutationCrystals = crystals - cost.MutationCrystals
 	inst.Evolved = true
 	inst.EvolutionId = useRecipe and useRecipe.Id or ("evolved_" .. tostring(inst.CharacterId))
@@ -497,6 +526,14 @@ function LaboratoryService.UpgradeTrait(player: Player, instanceId: any, traitId
 	if inst.Placed == true then
 		return false, "instance must be unplaced (upgrade from inventory)"
 	end
+	-- Theft / expedition integrity: a stolen in-transit instance or
+	-- an instance away on an expedition must not gain trait levels.
+	if inst.InTransit == true then
+		return false, "instance is in transit (stolen)"
+	end
+	if inst.OnExpedition == true then
+		return false, "instance is on an expedition"
+	end
 	local def = Characters.GetById(inst.CharacterId)
 	if not def then
 		return false, "unknown character"
@@ -529,7 +566,7 @@ function LaboratoryService.UpgradeTrait(player: Player, instanceId: any, traitId
 	if not data then
 		return false, "no data"
 	end
-	local coins = tonumber(data.Coins) or 0
+	local coins = spendableCoins(player, data)
 	local crystals = tonumber(data.MutationCrystals) or 0
 	if coins < cost.Coins then
 		return false, "not enough coins (" .. tostring(cost.Coins) .. " needed)"
@@ -537,7 +574,7 @@ function LaboratoryService.UpgradeTrait(player: Player, instanceId: any, traitId
 	if crystals < cost.MutationCrystals then
 		return false, "not enough Mutation Crystals (" .. tostring(cost.MutationCrystals) .. " needed)"
 	end
-	data.Coins = coins - cost.Coins
+	_dataService.AddCoins(player, -cost.Coins)
 	data.MutationCrystals = crystals - cost.MutationCrystals
 	inst.TraitLevels[cleanTrait] = nextLevel
 	if nextLevel >= LabDefs.TRAIT_MAX_LEVEL then
@@ -636,6 +673,14 @@ function LaboratoryService.SwitchAlternateForm(player: Player, instanceId: any):
 	if inst.Placed == true then
 		return false, "instance must be unplaced (swap from inventory)"
 	end
+	-- Theft / expedition integrity: a stolen in-transit instance or
+	-- an instance away on an expedition must not change form.
+	if inst.InTransit == true then
+		return false, "instance is in transit (stolen)"
+	end
+	if inst.OnExpedition == true then
+		return false, "instance is on an expedition"
+	end
 	if inst.Evolved == true then
 		return false, "evolved Brainrots cannot change form"
 	end
@@ -654,7 +699,7 @@ function LaboratoryService.SwitchAlternateForm(player: Player, instanceId: any):
 		return false, "no data"
 	end
 	local cost = LabDefs.AlternateFormCost
-	local coins = tonumber(data.Coins) or 0
+	local coins = spendableCoins(player, data)
 	local crystals = tonumber(data.MutationCrystals) or 0
 	if coins < cost.Coins then
 		return false, "not enough coins (" .. tostring(cost.Coins) .. " needed)"
@@ -662,7 +707,7 @@ function LaboratoryService.SwitchAlternateForm(player: Player, instanceId: any):
 	if crystals < cost.MutationCrystals then
 		return false, "not enough Mutation Crystals (" .. tostring(cost.MutationCrystals) .. " needed)"
 	end
-	data.Coins = coins - cost.Coins
+	_dataService.AddCoins(player, -cost.Coins)
 	data.MutationCrystals = crystals - cost.MutationCrystals
 	local oldId = inst.CharacterId
 	inst.CharacterId = alternate

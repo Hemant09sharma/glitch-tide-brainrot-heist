@@ -613,6 +613,16 @@ function ConveyorService.BuyItem(player: Player, instanceId: string): (boolean, 
 	local data = _dataService.GetOrLoad(player)
 	local coins = tonumber(data.Coins) or 0
 	local price = tonumber(item.Price) or 0
+	-- R4-3: affordability is judged on spendable coins (balance
+	-- above any reservation held for a pending reward commit).
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, spendable = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(spendable) == "number" then
+			coins = spendable
+		end
+	end
 	if coins < price then
 		return false, "not enough coins"
 	end

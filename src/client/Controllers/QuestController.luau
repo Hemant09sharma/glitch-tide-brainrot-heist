@@ -272,7 +272,7 @@ function QuestController.Claim(questId: any)
 	claimCooldowns[id] = now
 	setStatus("Claiming reward — waiting for the server…")
 	pcall(function()
-		(remote :: RemoteEvent):FireServer(questId)
+		(remote :: RemoteEvent):FireServer({ Action = "ClaimQuest", QuestId = id })
 	end)
 	task.delay(1.5, function()
 		QuestController.Refresh()

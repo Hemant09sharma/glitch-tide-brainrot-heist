@@ -213,6 +213,21 @@ function Economy.ConveyorPrice(characterId: string, glitched: boolean?): number
 	return def.Cost
 end
 
+-- The banked-income share of a steal reward, on its own: half of what
+-- the Brainrot had banked (floored), before the flat rarity bonus.
+-- StealReward and RaidService.ConfirmDelivery share this ONE
+-- computation, so the remainder left on a delivered copy can never
+-- drift from what was actually paid out. Do not duplicate this
+-- arithmetic anywhere else.
+function Economy.StealRewardShare(characterId: string, bankedIncome: number): number
+	local def = Characters.GetById(characterId)
+	if def == nil then
+		return 0
+	end
+	local banked = math.max(0, math.floor(bankedIncome))
+	return math.floor(banked * Config.StealRewardMultiplier)
+end
+
 -- What a thief walks away with after stealing a Brainrot: half of the
 -- income that Brainrot had banked in the victim's base, plus a flat
 -- bonus scaled to the Brainrot's rarity income.
@@ -221,9 +236,7 @@ function Economy.StealReward(characterId: string, bankedIncome: number): number
 	if def == nil then
 		return 0
 	end
-	local banked = math.max(0, math.floor(bankedIncome))
-	local share = math.floor(banked * Config.StealRewardMultiplier)
-	return share + def.IncomePerSec * 10
+	return Economy.StealRewardShare(characterId, bankedIncome) + def.IncomePerSec * 10
 end
 
 -- Cost of fusing two Brainrots (coins + Mutation Crystals), or nil

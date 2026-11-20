@@ -113,6 +113,24 @@ local function rateOk(player: Player, key: string, interval: number): boolean
 	return true
 end
 
+
+-- R4-3: spendable balance — the raw balance minus any reservation
+-- held for a pending reward commit (DataService.ReserveCoins).
+-- Falls back to the raw balance when the DataService has no
+-- reservation API (older stub).
+local function spendableCoins(player: Player, data: any): number
+	local coins = tonumber(data.Coins) or 0
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, value = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(value) == "number" then
+			return value
+		end
+	end
+	return coins
+end
+
 local function sanitize(id: any): string?
 	if Security and Security.SanitizeId then
 		local ok, clean = pcall(function()
@@ -896,10 +914,10 @@ function AbilityService.UnlockPower(player: Player, powerId: any, costCoins: any
 	-- v1.0.0 charged Gems from its own table; the shared def charges
 	-- Coins, and Coins is what is deducted here.
 	local cost = tonumber(def.Cost) or 0
-	if (tonumber(data.Coins) or 0) < cost then
+	if spendableCoins(player, data) < cost then
 		return false, "not enough coins"
 	end
-	data.Coins = (tonumber(data.Coins) or 0) - cost
+	_dataService.AddCoins(player, -cost)
 	table.insert(data.UnlockedPowers, clean)
 	task.spawn(function()
 		pcall(function()

@@ -14,7 +14,6 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 local Config = require(ReplicatedStorage:WaitForChild("Config"))
 local Characters = require(ReplicatedStorage:WaitForChild("Characters"))
@@ -283,6 +282,32 @@ end
 local function onPlayerAdded(player: Player): ()
 	local ok, err = pcall(function()
 		_dataService.GetOrLoad(player)
+		-- R4-8: a session that cannot save must TELL the player.
+		-- LoadData already refuses to overwrite the genuine profile
+		-- in that case; the warning (SaveWarning remote) is what
+		-- stops the player losing a whole session's earnings without
+		-- knowing. Fired on join, after the load, so the client
+		-- banner matches the server's actual save state.
+		if _dataService.GetSaveWarning ~= nil then
+			pcall(function()
+				local warning = _dataService.GetSaveWarning(player)
+				if warning ~= nil then
+					fireClient(Remotes.Names.SaveWarning, player, warning)
+				end
+			end)
+		end
+		-- R2-5 canonical rejoin recovery: resolve any stale in-transit
+		-- record / unpaid steal reward left by a crash or a pre-fix
+		-- leave. Idempotent; RaidService.Init's PlayerAdded backstop
+		-- calls the same entry point (it fires first — it was
+		-- connected earlier — and this call is then a no-op), so a
+		-- missed wiring in either place cannot strand a recovery.
+		local raidService = _optional["RaidService"]
+		if raidService ~= nil and type(raidService.RecoverOnRejoin) == "function" then
+			pcall(function()
+				raidService.RecoverOnRejoin(player)
+			end)
+		end
 		grantStarter(player)
 		BaseService.AssignBase(player)
 		BaseService.RebuildBase(player)
@@ -301,20 +326,21 @@ local function onPlayerAdded(player: Player): ()
 	end)
 end
 
-local function onPlayerRemoving(player: Player): ()
-	pcall(function()
-		CarryService.ClearCarried(player, true)
-	end)
-	pcall(function()
-		BaseService.ReleaseBase(player)
-	end)
-	pcall(function()
-		ConveyorService.OnPlayerLeaving(player)
-	end)
-	pcall(function()
-		_dataService.SaveData(player)
-	end)
-end
+-- R2-5 lifecycle ownership (why there is NO onPlayerRemoving here):
+-- DataService is the SINGLE save owner on leave / shutdown
+-- (Main.server.luau runs DataService.Init first, so its
+-- PlayerRemoving / BindToClose handlers are connected first). Its
+-- handlers run the registered pre-save hooks (RaidService.
+-- HandlePlayerLeaving returns in-transit Brainrots) BEFORE the save,
+-- then save once and clear the cache. The old GameManager
+-- onPlayerRemoving (ClearCarried + ReleaseBase + OnPlayerLeaving +
+-- SaveData) and its second BindToClose are REMOVED: every piece of
+-- that cleanup is already connected by the service that owns it
+-- (CarryService / BaseService / ConveyorService each hook
+-- PlayerRemoving themselves, cleanup-only, never touching persisted
+-- data), and the second save found no cache — it persisted nothing —
+-- while the second BindToClose saved with no recovery. Keeping them
+-- would re-create the competing-handlers race this fix removes.
 
 -- pcall-load one optional service and Init it. Each service has its own
 -- Init signature, so they are special-cased here; a generic
@@ -556,6 +582,19 @@ local function wireCrossLinks(): ()
 		wireAll(service, shared)
 	end
 	-- Core-loop services take the raid/mutation/event services too.
+	-- R2-6 (P1-3): CarryService is a required CORE service, so it is
+	-- never in _optional and the wireAll loop above never reaches it
+	-- — SetCompanionService sat in the shared table but was never
+	-- called on CarryService, so the companion CarrySpeed bonus (up
+	-- to 0.75 total) never applied in production and carrying always
+	-- used the Config 0.6 fallback. Wired here explicitly, like
+	-- RaidService / MutationService below. SetCompanionService
+	-- itself ignores a nil / invalid service, so an absent
+	-- CompanionService keeps the 0.6 fallback and cannot crash
+	-- CarryService.
+	if _optional["CompanionService"] ~= nil then
+		CarryService.SetCompanionService(_optional["CompanionService"])
+	end
 	if _optional["RaidService"] ~= nil then
 		CarryService.SetRaidService(_optional["RaidService"])
 		BaseService.SetRaidService(_optional["RaidService"])
@@ -652,25 +691,14 @@ function GameManager.Init(dataService: any, economyService: any, map: Model?): (
 	end
 	wireCrossLinks()
 
-	-- Join / leave hooks (including players already in-game on reload).
+	-- Join hook (including players already in-game on reload).
+	-- Leave / shutdown hooks are NOT connected here: DataService owns
+	-- the save-on-leave and the shutdown save (see the R2-5 note above
+	-- onPlayerAdded), and the core services hook PlayerRemoving
+	-- themselves for cleanup.
 	Players.PlayerAdded:Connect(onPlayerAdded)
-	Players.PlayerRemoving:Connect(onPlayerRemoving)
 	for _, player in ipairs(Players:GetPlayers()) do
 		task.spawn(onPlayerAdded, player)
-	end
-
-	-- Save everything on shutdown.
-	if not RunService:IsStudio() then
-		pcall(function()
-			game:BindToClose(function()
-				for _, player in ipairs(Players:GetPlayers()) do
-					pcall(function()
-						_dataService.SaveData(player)
-					end)
-				end
-				task.wait(2)
-			end)
-		end)
 	end
 
 	print("[GameManager] Initialised (persistent world loop, no rounds)")

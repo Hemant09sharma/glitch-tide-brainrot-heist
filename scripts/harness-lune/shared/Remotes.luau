@@ -32,6 +32,7 @@ Remotes.Names = {
 	PickupBrainrot = "PickupBrainrot",
 	DropBrainrot = "DropBrainrot",
 	PlaceBrainrot = "PlaceBrainrot",
+	StoreBrainrot = "StoreBrainrot",
 	StealBrainrot = "StealBrainrot",
 	RequestBase = "RequestBase",
 	UpgradeBase = "UpgradeBase",
@@ -75,6 +76,11 @@ Remotes.Names = {
 	-- Misc
 	NPCDialogue = "NPCDialogue",
 	SettingsUpdate = "SettingsUpdate",
+	-- R4-8: server -> client save warning. Fired by GameManager on
+	-- join when the player's session cannot save (load failed, or
+	-- another server holds the session lease): {Reason, Message}.
+	-- HUDController shows it as a persistent banner until rejoin.
+	SaveWarning = "SaveWarning",
 	-- Reserved: no handler is wired to this remote. Cosmetics equip via
 	-- the SelectCharacter envelope (ProgressionService); this name exists
 	-- so the fallback lookup resolves to a real, inert RemoteEvent.
@@ -133,6 +139,8 @@ Remotes.Names = {
 --     (RaidService; client firer added Wave 3 in InteractionController
 --     — steal scan of Placed_<InstanceId> models + owner-sign victim
 --     resolution), UpgradeBase, UpgradeBrainrot, CollectIncome,
+--     StoreBrainrot (BaseService; client firer in BaseController's
+--     placed list — STORE button per own placed Brainrot),
 --     MutateBrainrot, FuseBrainrot, ClaimQuest, Rebirth, EquipCosmetic
 --     (ProgressionService, Action="EquipCosmetic" envelope),
 --     NPCDialogue (server fires; InteractionController listens),
@@ -200,6 +208,7 @@ local EVENT_NAMES: { string } = {
 	"PickupBrainrot",
 	"DropBrainrot",
 	"PlaceBrainrot",
+	"StoreBrainrot",
 	"StealBrainrot",
 	"UpgradeBase",
 	"UpgradeBrainrot",

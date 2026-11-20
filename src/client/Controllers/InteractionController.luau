@@ -82,6 +82,15 @@ local currentPromptText: string = ""
 -- overwrite the prompt text with the nearest-target prompt.
 local dialogueShowing = false
 
+-- Forward declarations: promptFor / showPrompt are DEFINED below the
+-- steal section, but armStealWatchdog and ApplyStealAlert above call
+-- them. Without these they resolve to nil globals and the 5s steal
+-- watchdog firing, or any StealAlert arriving, errors on a call to
+-- nil. The definitions below assign to THESE locals (plain `=`, not
+-- `local function`), so the early callers bind to the same slots.
+local promptFor: (any) -> string?
+local showPrompt: (string?) -> ()
+
 -- STEAL (v1.1 E, audit F1): the StealBrainrot remote had a server
 -- handler (RaidService.onSteal) but NO client firer. The scan below
 -- is the firer. Design (see QA_V11_E.md §13):
@@ -415,7 +424,7 @@ function InteractionController.ApplyStealAlert(payload: any)
 	end
 end
 
-local function promptFor(target: any): string?
+promptFor = function(target: any): string?
 	if not target then
 		return nil
 	end
@@ -449,7 +458,7 @@ local function promptFor(target: any): string?
 	return key .. " — Interact"
 end
 
-local function showPrompt(text: string?)
+showPrompt = function(text: string?)
 	if not promptFrame or not promptLabel then
 		return
 	end

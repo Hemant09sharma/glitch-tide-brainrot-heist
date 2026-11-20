@@ -24,9 +24,11 @@
 --
 -- REMOTE: MutateBrainrot exists in Remotes.Names (RemoteEvent), so the
 -- handler binds to it directly (UpgradeBrainrot is only the fallback
--- if the name ever disappears). Visual updates fire on BaseUpdate when
--- present, else PlayerStats (a RemoteEvent in Remotes.luau, so that
--- fallback fires normally).
+-- if the name ever disappears). Visual updates come from BaseService's
+-- RebuildBase full BaseUpdate snapshot (R3-7: the old partial
+-- {Action = "MutationApplied"} push through the same remote was
+-- deleted — no client handler ever read it, and it overwrote the
+-- full snapshot in BaseController.ApplyBaseUpdate).
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -41,6 +43,10 @@ local MutationService = {}
 local _dataService: any = nil
 local _questService: any = nil
 local _eventService: any = nil
+-- Optional: BaseService (SetBaseService). Only used to rebuild the
+-- placed models after a placed copy's Mutation is synced below;
+-- GameManager's cross-link pass calls the setter automatically. The
+-- data-level sync works without it.
 
 -- Local mutation table (used ONLY when no shared Mutations module
 -- exists). v1.0.1 QA: this used to be a DIFFERENT 8-entry table with
@@ -124,15 +130,6 @@ local function getRemote(name: string): RemoteEvent?
 		return remote :: RemoteEvent
 	end
 	return nil
-end
-
-local function fireClient(name: string, player: Player, payload: any)
-	local remote = getRemote(name)
-	if remote then
-		pcall(function()
-			remote:FireClient(player, payload)
-		end)
-	end
 end
 
 local function getData(player: Player): any
@@ -235,6 +232,17 @@ function MutationService.GetMutationCostMultiplier(): number
 	return 1
 end
 
+-- SetBaseService(baseService): optional link used ONLY to rebuild the
+-- placed models after MutateBrainrot syncs a placed copy's Mutation
+-- (R2-1). GameManager's cross-link pass calls this setter
+-- automatically when BaseService is loaded; without it the data-level
+-- sync still happens and the next RebuildBase / re-place picks it up.
+function MutationService.SetBaseService(baseService: any)
+	if baseService and type(baseService.RebuildBase) == "function" then
+		_baseService = baseService
+	end
+end
+
 -- ---------------------------------------------------------------------------
 -- Owned-instance registry (shared with FusionService).
 -- ---------------------------------------------------------------------------
@@ -274,14 +282,37 @@ function MutationService.GetInstances(player: Player): { any }
 		end
 		for _, list in ipairs(placedLists) do
 			for _, placed in ipairs(list) do
-				if type(placed) == "table" and type(placed.CharacterId) == "string" then
+				if type(placed) == "table" and type(placed.InstanceId) == "string" then
+					-- Match by InstanceId, not CharacterId: two
+					-- instances of the same character are distinct,
+					-- and matching the first unplaced one could flag
+					-- the wrong instance as placed.
 					for _, inst in ipairs(data.OwnedInstances) do
-						if inst.CharacterId == placed.CharacterId and not inst.Placed then
+						if inst.InstanceId == placed.InstanceId then
 							inst.Placed = true
 							inst.Slot = tonumber(placed.Slot) or 0
 							inst.Level = tonumber(placed.Level) or inst.Level
+							-- A glitched placed Brainrot sets the
+							-- Glitched flag — it must NEVER overwrite
+							-- inst.Mutation with "glitched": that
+							-- would destroy a real mutation (e.g.
+							-- "golden") the instance already has.
 							if placed.Glitched == true then
-								inst.Mutation = "glitched"
+								inst.Glitched = true
+							end
+							-- R3-8: a legacy placed copy can carry a
+							-- Mutation the freshly seeded owned record
+							-- lacks (pre-R2-1 placed copies were never
+							-- synced from the owned record). Mirror it
+							-- onto the seed — the owned record is
+							-- authoritative for steal snapshots and
+							-- the "already has" check, so it must agree
+							-- with what the base displays and pays.
+							-- Only the seed is healed: a live owned
+							-- record is never overwritten from placed
+							-- (R2-1: owned wins).
+							if inst.Mutation == nil and type(placed.Mutation) == "string" then
+								inst.Mutation = placed.Mutation
 							end
 							break
 						end
@@ -451,8 +482,47 @@ function MutationService.MutateBrainrot(player: Player, instanceId: any, mutatio
 	if not inst then
 		return false, "instance not owned"
 	end
+	-- Theft / expedition integrity: a stolen in-transit instance or
+	-- an instance away on an expedition must not be mutated — the
+	-- mutation would land on a record whose ownership is unresolved
+	-- (and, for a stolen record, would be lost or duplicated by the
+	-- return path).
+	if inst.InTransit == true then
+		return false, "instance is in transit (stolen)"
+	end
+	if inst.OnExpedition == true then
+		return false, "instance is on an expedition"
+	end
 	if inst.Mutation == cleanMutation then
 		return false, "already has this mutation"
+	end
+	-- R3-8 (legacy divergence): a legacy record can carry a Mutation
+	-- on its PLACED copy while the owned record has none (the seed
+	-- mirror below heals this only when OwnedInstances is built
+	-- fresh; a return can recreate it). In that state the player
+	-- already has the mutation in every observable sense — the base
+	-- displays it, income pays it, and a steal snapshot falls back
+	-- to it — so charging crystals for it again is a double-charge.
+	-- Reject it. Narrow on purpose: only when the owned record has
+	-- NO mutation. When owned holds a different mutation (e.g. a
+	-- stale placed copy lagging behind a paid mutation), re-buying
+	-- the displayed mutation is still allowed — it heals the
+	-- divergence by making the owned record match the display.
+	if inst.Mutation == nil then
+		local placedLists: { { any } } = {}
+		if type(data.Base) == "table" and type(data.Base.Placed) == "table" then
+			table.insert(placedLists, data.Base.Placed)
+		end
+		if type(data.Placed) == "table" then
+			table.insert(placedLists, data.Placed)
+		end
+		for _, list in ipairs(placedLists) do
+			for _, placed in ipairs(list) do
+				if type(placed) == "table" and placed.InstanceId == cleanInstance and placed.Mutation == cleanMutation then
+					return false, "already has this mutation"
+				end
+			end
+		end
 	end
 	-- v1.0.1 QA: this check was missing entirely — any character could
 	-- take any mutation, ignoring the MutationCompatibility lists in
@@ -467,25 +537,50 @@ function MutationService.MutateBrainrot(player: Player, instanceId: any, mutatio
 	end
 	data.MutationCrystals = crystals - cost
 	inst.Mutation = cleanMutation
+	-- R3-7: the placed copy is synced above and RebuildBase (below)
+	-- fires the FULL BaseUpdate snapshot, so the client's base list
+	-- (which renders from that snapshot) updates too. The old code
+	-- then ALSO fired a partial {Action = "MutationApplied", ...}
+	-- payload through the same BaseUpdate remote — and
+	-- BaseController.ApplyBaseUpdate assigns baseState = data
+	-- unconditionally, so the partial (no Placed list, no
+	-- BankedIncome, no Slots) overwrote the just-sent full snapshot:
+	-- banked income read 0 and slots read "N / 0" until the next
+	-- full update arrived. No client code ever branched on
+	-- MutationApplied (verified by grep over src/client: no handler
+	-- reads Action == "MutationApplied"), so the partial is deleted
+	-- outright — not moved to another remote (that would need a
+	-- Remotes.luau change, out of scope for this fix) and not kept
+	-- as a notice. RebuildBase fires for unplaced mutations too:
+	-- the full snapshot's Unplaced list is the only place the
+	-- client learns an unplaced mutation, and rebuilding placed
+	-- models is the price of a correct push in both cases.
+	do
+		local lists: { { any } } = {}
+		if type(data.Base) == "table" and type(data.Base.Placed) == "table" then
+			table.insert(lists, data.Base.Placed)
+		end
+		if type(data.Placed) == "table" then
+			table.insert(lists, data.Placed)
+		end
+		for _, list in ipairs(lists) do
+			for _, placed in ipairs(list) do
+				if type(placed) == "table" and placed.InstanceId == cleanInstance then
+					placed.Mutation = cleanMutation
+				end
+			end
+		end
+		if _baseService and type(_baseService.RebuildBase) == "function" then
+			pcall(function()
+				_baseService.RebuildBase(player)
+			end)
+		end
+	end
 	task.spawn(function()
 		pcall(function()
 			_dataService.SaveData(player)
 		end)
 	end)
-	-- Visual update: BaseUpdate when it exists, else PlayerStats.
-	local payload = {
-		Action = "MutationApplied",
-		InstanceId = cleanInstance,
-		CharacterId = inst.CharacterId,
-		MutationId = cleanMutation,
-		MutationName = def.Name,
-		MutationCrystals = data.MutationCrystals,
-	}
-	if getRemote(_names.BaseUpdate) then
-		fireClient(_names.BaseUpdate, player, payload)
-	else
-		fireClient(_names.PlayerStats, player, payload)
-	end
 	if _questService and type(_questService.RecordEvent) == "function" then
 		pcall(function()
 			_questService.RecordEvent(player, "mutate", 1)

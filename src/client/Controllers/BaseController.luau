@@ -142,15 +142,47 @@ local function incomeOf(placed: any): number
 	return 0
 end
 
+-- Forward a BaseUpdate payload to the shop (its upgrade rows sync
+-- from base state; it is also the only consumer of Action-bearing
+-- partial payloads, e.g. FusionResult clearing the fuse watchdog).
+local function notifyShop(data: any): ()
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("ShopController")
+		if mod then
+			local shop = require(mod)
+			if shop.OnBaseUpdate then
+				shop.OnBaseUpdate(data)
+			end
+		end
+	end)
+end
+
 function BaseController.ApplyBaseUpdate(data: any)
 	if typeof(data) ~= "table" then
 		return
 	end
-	baseState = data
+	-- R3-7: BaseUpdate carries two shapes — full snapshots from
+	-- BaseService.GetBase (Placed table, BankedIncome, Slots,
+	-- IncomePerSec) and Action-only event payloads with no Placed
+	-- list (MutationService's MutationApplied, removed server-side
+	-- by the same fix; FusionService's FusionResult used to be one
+	-- too, but since R4-5 it rides ON a full snapshot instead, and
+	-- only falls back to a bare partial on the PlayerStats remote,
+	-- which never reaches this handler). A partial must never
+	-- overwrite canonical client state: the old code assigned
+	-- baseState = data unconditionally, so a partial reset banked
+	-- income to 0 and slots total to 0 until the next full update.
+	-- Ignore partials for state purposes, but still forward them
+	-- to the shop (see notifyShop) so the fuse watchdog still
+	-- clears on FusionResult — the shop guards its own state the
+	-- same way (R4-5), so forwarding a partial is safe.
 	local placed = data.Placed or data.placed or data.Brainrots
-	if typeof(placed) == "table" then
-		placedList = placed
+	if typeof(placed) ~= "table" then
+		notifyShop(data)
+		return
 	end
+	baseState = data
+	placedList = placed
 	if incomeLabel then
 		local income = data.IncomePerSec or data.incomePerSec
 		if typeof(income) ~= "number" then
@@ -178,15 +210,7 @@ function BaseController.ApplyBaseUpdate(data: any)
 	end
 	BaseController.RebuildPlaced()
 	-- Keep the shop's upgrade rows in sync with the new base state.
-	pcall(function()
-		local mod = script.Parent:FindFirstChild("ShopController")
-		if mod then
-			local shop = require(mod)
-			if shop.OnBaseUpdate then
-				shop.OnBaseUpdate(data)
-			end
-		end
-	end)
+	notifyShop(data)
 end
 
 function BaseController.GetPlaced(): { any }
@@ -230,7 +254,7 @@ function BaseController.RebuildPlaced()
 		stroke.Thickness = 2
 		stroke.Parent = row
 		local nameLabel = makeLabel(row, name .. "  •  Lv " .. tostring(level), 13, Color3.fromRGB(255, 255, 255), true)
-		nameLabel.Size = UDim2.new(1, -220, 0, 20)
+		nameLabel.Size = UDim2.new(1, -316, 0, 20)
 		nameLabel.Position = UDim2.new(0, 12, 0, 5)
 		local subLabel = makeLabel(
 			row,
@@ -239,7 +263,7 @@ function BaseController.RebuildPlaced()
 			Color3.fromRGB(190, 200, 220),
 			false
 		)
-		subLabel.Size = UDim2.new(1, -220, 0, 16)
+		subLabel.Size = UDim2.new(1, -316, 0, 16)
 		subLabel.Position = UDim2.new(0, 12, 0, 27)
 		local upBtn = Instance.new("TextButton")
 		upBtn.Size = UDim2.new(0, 96, 0, 28)
@@ -252,6 +276,40 @@ function BaseController.RebuildPlaced()
 		upBtn.BorderSizePixel = 0
 		corner(upBtn, 8)
 		upBtn.Parent = row
+		-- STORE (P0-4): unplace this Brainrot back into inventory. This
+		-- list only ever shows the LOCAL player's own placed Brainrots
+		-- (from their own RequestBase / BaseUpdate snapshot), so the
+		-- button can only ever fire for their own instances; the
+		-- server still re-validates ownership, theft and expedition
+		-- state. No coins are paid back — there is no sell-back.
+		local storeBtn = Instance.new("TextButton")
+		storeBtn.Size = UDim2.new(0, 88, 0, 28)
+		storeBtn.Position = UDim2.new(1, -204, 0, 10)
+		storeBtn.Text = "STORE"
+		storeBtn.Font = Enum.Font.GothamBold
+		storeBtn.TextSize = 12
+		storeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		storeBtn.BackgroundColor3 = Color3.fromRGB(120, 70, 60)
+		storeBtn.BorderSizePixel = 0
+		corner(storeBtn, 8)
+		storeBtn.Parent = row
+		storeBtn.MouseButton1Click:Connect(function()
+			local remote = getRemote(remoteName("StoreBrainrot", "StoreBrainrot"))
+			if not remote or not remote:IsA("RemoteEvent") then
+				setStatus("StoreBrainrot remote is not available yet.", true)
+				return
+			end
+			local instanceId = placed.InstanceId or placed.instanceId
+			if typeof(instanceId) ~= "string" or instanceId == "" then
+				setStatus("That Brainrot has no server id yet — reopen the panel to refresh.", true)
+				return
+			end
+			setStatus("Storing " .. name .. " — waiting for the server…")
+			playSound("click")
+			pcall(function()
+				(remote :: RemoteEvent):FireServer(instanceId)
+			end)
+		end)
 		upBtn.MouseButton1Click:Connect(function()
 			local remote = getRemote(remoteName("UpgradeBrainrot", "UpgradeBrainrot"))
 			if not remote or not remote:IsA("RemoteEvent") then

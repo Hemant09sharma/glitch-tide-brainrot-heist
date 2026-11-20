@@ -316,6 +316,57 @@ local function ensureProgressionData(player: Player): any
 	return data
 end
 
+-- ---------------------------------------------------------------------------
+-- R5-6: reservation-aware coin helpers.
+-- ---------------------------------------------------------------------------
+-- A pending steal-reward commit (RaidService.commitPendingPayment,
+-- R4-3) credits the reward and reserves it (DataService.ReserveCoins)
+-- for the duration of its verified save. A Rebirth/Prestige that
+-- fires inside that save window must not wipe the reserved coins:
+-- the reset keeps StartingCoins PLUS every reserved coin, so a later
+-- commit success keeps the reward and a later rollback subtracts
+-- exactly. The coin requirement is likewise judged on SPENDABLE
+-- coins — reserved coins are already-credited reward money awaiting
+-- a verified save, not the player's to spend yet — so a player
+-- cannot buy a rebirth/prestige with coins earmarked for a pending
+-- commit. Every other R4-3 spending route judges affordability the
+-- same way.
+-- Both helpers fall back to the raw balance when DataService has no
+-- reservation API (stub DataServices in other suites), preserving
+-- the old behaviour there.
+local function reservedCoins(player: Player): number
+	if _dataService and type(_dataService.GetReservedCoins) == "function" then
+		local ok, reserved = pcall(function()
+			return _dataService.GetReservedCoins(player)
+		end)
+		if ok and type(reserved) == "number" then
+			return math.max(0, math.floor(reserved))
+		end
+	end
+	return 0
+end
+
+local function spendableCoins(player: Player, data: any): number
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, spendable = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(spendable) == "number" then
+			return math.max(0, math.floor(spendable))
+		end
+	end
+	return tonumber(data.Coins) or 0
+end
+
+-- resetCoins(player): the coin balance a Rebirth/Prestige reset lands
+-- on — StartingCoins plus every reserved coin (R5-6). Wiping the
+-- reserved coins would lose the reward on commit success and corrupt
+-- the rollback on commit failure (the exact subtraction would clamp
+-- at zero and eat the reset's StartingCoins instead).
+local function resetCoins(player: Player): number
+	return (Config.StartingCoins or 100) + reservedCoins(player)
+end
+
 local function distinctCount(data: any): number
 	local seen: { [string]: boolean } = {}
 	local count = 0
@@ -780,7 +831,9 @@ function ProgressionService.Rebirth(player: Player): (boolean, any)
 	end
 	local cfg = rebirthConfig()
 	local level = tonumber(data.Level) or 1
-	local coins = tonumber(data.Coins) or 0
+	-- R5-6: judge the coin requirement on SPENDABLE coins — a
+	-- pending reward's reserved coins are not the player's to spend.
+	local coins = spendableCoins(player, data)
 	local distinct = distinctCount(data)
 	local rebirths = tonumber(data.Rebirths) or 0
 	if rebirths >= cfg.MaxRebirths then
@@ -801,7 +854,11 @@ function ProgressionService.Rebirth(player: Player): (boolean, any)
 	-- with Placed cleared (placed Brainrots return to the inventory).
 	-- v1.0.0 wiped Unlocked to the starter and nilled OwnedInstances,
 	-- destroying the whole collection on every rebirth.
-	data.Coins = Config.StartingCoins or 100
+	-- R5-6: resetCoins keeps every reserved coin on top of
+	-- StartingCoins, so a reward commit open in the save window
+	-- survives the reset (success keeps it, rollback subtracts it
+	-- exactly).
+	data.Coins = resetCoins(player)
 	data.XP = 0
 	data.Level = 1
 	data.Gems = (tonumber(data.Gems) or 0) + cfg.RewardGems
@@ -891,7 +948,9 @@ function ProgressionService.Prestige(player: Player): (boolean, any)
 	end
 	local cfg = rebirthConfig()
 	local level = tonumber(data.Level) or 1
-	local coins = tonumber(data.Coins) or 0
+	-- R5-6: judge the coin requirement on SPENDABLE coins (see
+	-- Rebirth — a pending reward's reserved coins are not spendable).
+	local coins = spendableCoins(player, data)
 	local distinct = distinctCount(data)
 	local rebirths = tonumber(data.Rebirths) or 0
 	local prestige = tonumber(data.Prestige) or 0
@@ -911,7 +970,9 @@ function ProgressionService.Prestige(player: Player): (boolean, any)
 	-- Reset economy + placed state only — same shape as Rebirth.
 	-- Collection (Unlocked / OwnedInstances), dimension unlocks and
 	-- mastery are all kept.
-	data.Coins = Config.StartingCoins or 100
+	-- R5-6: resetCoins keeps every reserved coin on top of
+	-- StartingCoins (see Rebirth).
+	data.Coins = resetCoins(player)
 	data.XP = 0
 	data.Level = 1
 	data.Gems = (tonumber(data.Gems) or 0) + PRESTIGE_REWARD_GEMS

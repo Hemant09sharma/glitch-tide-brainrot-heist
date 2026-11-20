@@ -174,6 +174,12 @@ export type OwnedBrainrot = {
 	EvolvedFormName: string?,
 	TraitLevels: { [string]: number }?,
 	OnExpedition: boolean?,
+	-- Set while the instance is stolen and in transit between bases
+	-- (RaidService): while true, the record must not be consumed,
+	-- mutated, evolved, fused, placed or carried by any other system.
+	-- Set at steal time on the moved record; cleared only by
+	-- ConfirmDelivery / ReturnStolen after the transfer commits.
+	InTransit: boolean?,
 }
 
 -- A player's currency balances.

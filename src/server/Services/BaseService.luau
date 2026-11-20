@@ -36,7 +36,16 @@ local _playerPlot: { [Player]: number } = {}
 local _placedModels: { [Player]: { [string]: Model } } = {}
 local _placedBaseCF: { [Player]: { [string]: CFrame } } = {}
 local _placedPhase: { [Player]: { [string]: number } } = {}
-local _lastCall: { [Player]: number } = {}
+-- R3-8: per-action throttle. This used to be ONE shared timestamp
+-- per player across all five remote handlers, so two different
+-- legitimate actions inside 250 ms (Collect then Store, Place then
+-- Upgrade) silently dropped the second with no client feedback — the
+-- handlers just return. Each action now has its own 250 ms budget;
+-- a single action is still capped at 4/s per player, and every
+-- action is server-validated, so splitting the budget cannot mint
+-- anything. A burst of five different actions in one instant is
+-- still possible, but each is validated independently.
+local _lastCall: { [Player]: { [string]: number } } = {}
 
 local MIN_CALL_INTERVAL = 0.25
 local PLACE_DISTANCE = 12
@@ -173,13 +182,18 @@ local function getFunction(name: string): RemoteFunction?
 	return nil
 end
 
-local function rateLimited(player: Player): boolean
+local function rateLimited(player: Player, action: string): boolean
 	local now = os.clock()
-	local last = _lastCall[player] or 0
+	local perPlayer = _lastCall[player]
+	if perPlayer == nil then
+		perPlayer = {}
+		_lastCall[player] = perPlayer
+	end
+	local last = perPlayer[action] or 0
 	if now - last < MIN_CALL_INTERVAL then
 		return true
 	end
-	_lastCall[player] = now
+	perPlayer[action] = now
 	return false
 end
 
@@ -193,6 +207,49 @@ local function rootPosition(player: Player): Vector3?
 		return nil
 	end
 	return (root :: BasePart).Position
+end
+
+-- R5-2 (P0): session-health gate for the player-driven place/store
+-- paths. A session that cannot save (load failed, contested, lost —
+-- the R5-4 GetSaveBlockedReason state) must not change
+-- which Brainrots are placed: the change would live only in memory
+-- until the next save refuses, and on rejoin the stored profile
+-- disagrees with what the player saw. The check is LOCAL only (no
+-- DataStore call): placing/storing your own Brainrot transfers
+-- nothing between players, so the worst case of a merely-stale
+-- local view is a lost placement, not a lost or duplicated
+-- instance — the stored-lease probe is reserved for the steal /
+-- delivery commit points in RaidService, where an unverified lease
+-- can do real damage. When DataService has no session API (older
+-- DataService / test stub), the gate is skipped (healthy fallback).
+-- EXEMPT: the whole-record reinsert shape of PlaceBrainrot (a
+-- table, not a string id) — that is the server-side recovery
+-- restore RaidService.ReturnStolen / RecoverStaleTransit use, and
+-- blocking it would strand the Brainrot the gate exists to protect.
+local function sessionBlockedReason(player: Player): string?
+	-- The R5-4 reason API is the ONLY local signal the gate
+	-- consults. For the real DataService it is exactly equivalent
+	-- to IsSaveable (GetSaveBlockedReason, DataService.luau:721,
+	-- returns non-nil iff one of _loadFailed / _sessionContested /
+	-- _sessionLost is set; IsSaveable, :2240, is false iff one of
+	-- the same three flags is set), so nothing is lost by reading
+	-- the reason instead of the boolean. A DataService WITHOUT the
+	-- reason API (older / stub) falls back to healthy — the same
+	-- established fallback the RaidService gate uses, and the one
+	-- the theft/lifecycle suites rely on for their R2-4/R3-5
+	-- reward-pending behaviour.
+	if _dataService == nil then
+		return nil
+	end
+	if type(_dataService.GetSaveBlockedReason) == "function" then
+		local ok, reason = pcall(function()
+			return _dataService.GetSaveBlockedReason(player)
+		end)
+		if ok and type(reason) == "string" and reason ~= "" then
+			return reason
+		end
+	end
+	return nil
 end
 
 -- Lazily create the heist fields DataService's default data lacks.
@@ -964,6 +1021,44 @@ local function reinsertPlacedRecord(player: Player, record: { [string]: any }): 
 	if existing ~= nil then
 		return true, existing
 	end
+	-- R3-8 defence-in-depth: a whole-record reinsert must never plant
+	-- a Brainrot the player does not own. The only server-side caller
+	-- is RaidService's return path (via PlaceBrainrot's table shape),
+	-- which moves the owned record back to the victim and clears the
+	-- theft markers BEFORE reinserting — so a legitimate return always
+	-- passes: the owned record exists, is not in transit, is not
+	-- marked stolen from someone else, and its character matches.
+	-- Anything else is refused instead of risking a duplicated
+	-- Brainrot in a stranger's base. ensureBaseData above guarantees
+	-- OwnedInstances is a table by this point (it creates an empty
+	-- one for legacy saves), so the check always applies; a legacy
+	-- record with no matching owned entry is refused and stays in
+	-- inventory — no loss, no duplication — instead of being planted.
+	-- Clients can never reach this shape: onPlaceBrainrot stringifies
+	-- the instance id first, so a table never arrives from a remote.
+	local owned = findOwned(data, record.InstanceId)
+	if owned == nil then
+		warn("[BaseService] Reinsert refused for " .. player.Name
+			.. ": " .. tostring(record.InstanceId) .. " is not in their owned instances")
+		return false, "record is not owned by this player"
+	end
+	if owned.InTransit == true then
+		warn("[BaseService] Reinsert refused for " .. player.Name
+			.. ": " .. tostring(record.InstanceId) .. " is in transit (stolen)")
+		return false, "record is in transit"
+	end
+	local stolenFrom = tonumber(owned.StolenFromUserId)
+	if stolenFrom ~= nil and stolenFrom ~= player.UserId then
+		warn("[BaseService] Reinsert refused for " .. player.Name
+			.. ": " .. tostring(record.InstanceId) .. " is stolen from another player")
+		return false, "record is stolen from another player"
+	end
+	if owned.CharacterId ~= nil and record.CharacterId ~= nil
+		and owned.CharacterId ~= record.CharacterId then
+		warn("[BaseService] Reinsert refused for " .. player.Name
+			.. ": " .. tostring(record.InstanceId) .. " character does not match owned record")
+		return false, "record character does not match owned record"
+	end
 	local slot = math.floor(tonumber(record.Slot) or 0)
 	local maxSlots = effectiveSlots(player, base)
 	local buildModel = slot >= 1 and slot <= maxSlots
@@ -1020,8 +1115,20 @@ function BaseService.PlaceBrainrot(player: Player, instanceId: any, slot: any): 
 		return false, "invalid player"
 	end
 	-- Shape 2: server-side reinsert of a whole placed record.
+	-- R5-2: EXEMPT from the session-health gate below — this is the
+	-- recovery restore (ReturnStolen / RecoverStaleTransit), not a
+	-- player-driven place, and it must run in unhealthy sessions.
 	if type(instanceId) == "table" and type(instanceId.InstanceId) == "string" then
 		return reinsertPlacedRecord(player, instanceId)
+	end
+	-- R5-2 (P0): player-driven place (normal + stolen delivery) in
+	-- an unhealthy session is refused before anything moves. The
+	-- stolen-delivery branch is re-checked inside
+	-- RaidService.ConfirmDelivery (stored-lease probe); this gate
+	-- catches the session the local state already knows is unsaveable.
+	local blockedReason = sessionBlockedReason(player)
+	if blockedReason ~= nil then
+		return false, "session cannot save: " .. blockedReason
 	end
 	if type(instanceId) ~= "string" or instanceId == "" then
 		return false, "invalid instance"
@@ -1051,53 +1158,47 @@ function BaseService.PlaceBrainrot(player: Player, instanceId: any, slot: any): 
 		if carried == nil then
 			return false, "not carrying that brainrot"
 		end
-		-- Shape 3: transfer ownership first. ConfirmDelivery creates the
-		-- thief's fresh instance (via MutationService when linked); find
-		-- it — the last unplaced instance of that character — and place
-		-- that. If none exists (RaidService unlinked from MutationService),
-		-- mint the same record shape directly.
-		if _raidService == nil or type(_raidService.ConfirmDelivery) ~= "function" then
-			return false, "raid service unavailable"
-		end
-		local ok, delivered = pcall(function()
-			return _raidService.ConfirmDelivery(player, instanceId)
-		end)
-		if not ok or not delivered then
-			return false, "delivery failed"
-		end
-		local stolenCharacterId = carried.CharacterId
-		local stolenLevel = tonumber(carried.Level) or 1
-		if type(data.OwnedInstances) == "table" then
-			for i = #data.OwnedInstances, 1, -1 do
-				local record = data.OwnedInstances[i]
-				if record.CharacterId == stolenCharacterId and record.Placed ~= true then
-					owned = record
-					break
-				end
-			end
-		end
+		-- Shape 3: stolen delivery. The owned record is the SAME record
+		-- the steal moved to the thief at steal time (RaidService
+		-- moveOwnedRecord, flagged InTransit); resolve it by InstanceId
+		-- exactly — never by CharacterId, and never mint a fallback.
+		-- (The old comment claimed ConfirmDelivery "creates the thief's
+		-- fresh instance": wrong — ConfirmDelivery creates nothing; it
+		-- only clears the transit flag/entry and pays the reward. The
+		-- old backwards CharacterId scan could therefore place a
+		-- different unplaced instance of the same character, and the
+		-- mint fallback could double the instance. Both are gone.)
+		-- Nothing is confirmed yet: every validation below (slot,
+		-- already-placed, carry, plot, pedestal, distance) runs BEFORE
+		-- ConfirmDelivery (P1-2), so a failed placement leaves transit
+		-- live, pays nothing, and keeps the return path open.
+		owned = findOwned(data, instanceId)
 		if owned == nil then
-			local HttpService = game:GetService("HttpService")
-			owned = {
-				InstanceId = HttpService:GenerateGUID(false),
-				CharacterId = stolenCharacterId,
-				Level = stolenLevel,
-				Glitched = carried.Glitched == true,
-				Mutation = carried.Mutation,
-				Placed = false,
-				Slot = 0,
-				PurchasedAt = os.time(),
-			}
-			table.insert(data.OwnedInstances, owned)
-		end
-		if owned == nil then
+			-- No record to deliver: do NOT confirm and do NOT mint —
+			-- the moved record still exists somewhere, and minting a
+			-- new GUID here would double the instance.
 			return false, "brainrot not owned"
 		end
-		instanceId = owned.InstanceId
+		if owned.OnExpedition == true then
+			return false, "brainrot on expedition"
+		end
+		-- NOTE: owned.InTransit == true is EXPECTED here (set at steal
+		-- time, cleared only by ConfirmDelivery below). The InTransit
+		-- guard applies to the normal path, not to this delivery.
 	else
 		owned = findOwned(data, instanceId)
 		if owned == nil then
 			return false, "brainrot not owned"
+		end
+		-- Phase 1 guards: an in-transit or on-expedition instance may
+		-- not be placed by the normal path — only the stolen-delivery
+		-- branch above (which confirms through RaidService) may
+		-- resolve an InTransit record.
+		if owned.InTransit == true then
+			return false, "brainrot in transit"
+		end
+		if owned.OnExpedition == true then
+			return false, "brainrot on expedition"
 		end
 	end
 	if owned == nil then
@@ -1109,9 +1210,9 @@ function BaseService.PlaceBrainrot(player: Player, instanceId: any, slot: any): 
 	end
 	-- Must actually be carrying it: placing straight from the
 	-- inventory list, without carrying, would skip the carry slowdown
-	-- and the steal risk the whole loop is built on. (Skipped for a
-	-- stolen delivery: the stolen carry is cleared below and the
-	-- fresh instance takes its place.)
+	-- and the steal risk the whole loop is built on. (For a stolen
+	-- delivery the stolen carry is cleared below, once the delivery
+	-- has been confirmed — there is no fresh instance.)
 	if not isStolenDelivery then
 		if carried == nil then
 			return false, "not carrying that brainrot"
@@ -1134,6 +1235,31 @@ function BaseService.PlaceBrainrot(player: Player, instanceId: any, slot: any): 
 		return false, "too far from the pedestal"
 	end
 
+	-- P1-2: ONLY now, with every validation passed (slot, ownership,
+	-- already-placed, carry, plot, pedestal, distance), confirm the
+	-- stolen delivery. ConfirmDelivery verifies the transit record,
+	-- then clears the flag/entry and pays the reward. If it returns
+	-- false the delivery is NOT confirmed: transit stays live, no
+	-- reward is paid, and this placement aborts with no state change.
+	if isStolenDelivery then
+		if _raidService == nil or type(_raidService.ConfirmDelivery) ~= "function" then
+			return false, "raid service unavailable"
+		end
+		local ok, delivered = pcall(function()
+			return _raidService.ConfirmDelivery(player, instanceId)
+		end)
+		if not ok or not delivered then
+			return false, "delivery failed"
+		end
+		-- ConfirmDelivery moves no records; the owned record resolved
+		-- above is still the delivered one. Re-resolve defensively:
+		-- if it vanished, abort rather than placing a stale record.
+		owned = findOwned(data, instanceId)
+		if owned == nil then
+			return false, "brainrot not owned"
+		end
+	end
+
 	local placed: { [string]: any } = {
 		InstanceId = instanceId,
 		CharacterId = owned.CharacterId,
@@ -1141,8 +1267,18 @@ function BaseService.PlaceBrainrot(player: Player, instanceId: any, slot: any): 
 		Level = tonumber(owned.Level) or 1,
 		Glitched = owned.Glitched == true,
 		Mutation = owned.Mutation,
-		BankedIncome = 0,
-		PlacedAt = os.time(),
+		-- Preserve the delivered instance's banked income / placement
+		-- time from the owned record. For a stolen delivery,
+		-- RaidService.ConfirmDelivery (called above, before this
+		-- copy is built) already wrote the snapshot remainder onto
+		-- the owned record: BankedIncome is the banked amount minus
+		-- the reward share already paid, and PlacedAt is the delivery
+		-- time — the 120-second protection window restarts on a new
+		-- placement, intentionally. A normal place reads whatever
+		-- the owned record already carries; the 0 / now fallbacks
+		-- only apply when the owned record has no values at all.
+		BankedIncome = tonumber(owned.BankedIncome) or 0,
+		PlacedAt = tonumber(owned.PlacedAt) or os.time(),
 	}
 	table.insert(base.Placed, placed)
 	syncPlacedFlag(player, instanceId, true, slot)
@@ -1192,6 +1328,100 @@ function BaseService.RemovePlaced(player: Player, instanceId: string): { [string
 	end)
 	fireBaseUpdate(player)
 	return placed
+end
+
+-- Store (unplace) a placed Brainrot back into the owner's inventory.
+-- Returns (true, ownedRecord) or (false, reason). No sell-back reward:
+-- the economy has no store payout, so none is invented here.
+-- The placed copy's live fields are written back onto the OwnedInstances
+-- record BEFORE removal (RemovePlaced alone only flips Placed=false,
+-- which would discard a BankedIncome the placed copy held), then
+-- RemovePlaced does the teardown (model destroy, flag sync, save,
+-- BaseUpdate). Once stored the instance earns nothing — income sums
+-- placed instances only — and it can be placed again in a free slot.
+function BaseService.StoreBrainrot(player: Player, instanceId: any): (boolean, any)
+	if not player or not player.Parent then
+		return false, "invalid player"
+	end
+	if type(instanceId) ~= "string" or instanceId == "" then
+		return false, "invalid instance"
+	end
+	-- R5-2 (P0): storing in an unhealthy session is refused before
+	-- anything moves — the unplace would live only in memory until
+	-- the next save refuses, and on rejoin the stored profile
+	-- disagrees with what the player saw. (Local check only, same
+	-- reasoning as PlaceBrainrot above.)
+	local blockedReason = sessionBlockedReason(player)
+	if blockedReason ~= nil then
+		return false, "session cannot save: " .. blockedReason
+	end
+	local plotIndex = _playerPlot[player]
+	if plotIndex == nil then
+		return false, "no base assigned"
+	end
+	local data = _dataService.GetOrLoad(player)
+	local base = ensureBaseData(data)
+	-- Ownership: the base must be this player's own when the data
+	-- records an owner, and the placed record must live in THIS
+	-- player's base. A non-owner's data has no such placed record, so
+	-- the lookup below is the real enforcement; the OwnerUserId check
+	-- is defence in depth for data that records one.
+	if tonumber(base.OwnerUserId) ~= nil and tonumber(base.OwnerUserId) ~= 0
+		and tonumber(base.OwnerUserId) ~= player.UserId then
+		return false, "not your base"
+	end
+	local _, placed = findPlaced(base, instanceId)
+	if placed == nil then
+		return false, "brainrot not placed"
+	end
+	local owned = findOwned(data, instanceId)
+	if owned == nil then
+		return false, "brainrot not owned"
+	end
+	-- Phase 1 guards: never store an instance mid-theft, in transit,
+	-- or out on an expedition.
+	if owned.InTransit == true then
+		return false, "brainrot in transit"
+	end
+	if owned.OnExpedition == true then
+		return false, "brainrot on expedition"
+	end
+	-- Write the placed copy's live progression back onto the owned
+	-- record before the placed copy is destroyed. Level and Glitched
+	-- are kept in sync between the two copies (UpgradeBrainrot updates
+	-- both), so the placed values round-trip safely. Mutation is the
+	-- exception: MutationService.MutateBrainrot writes the owned record
+	-- ONLY, so a mutation applied after placement lives on the owned
+	-- record while the placed copy is stale — overwriting it here
+	-- would REVERT the mutation. The placed mutation is therefore
+	-- only a fill-in when the owned record has none. BankedIncome /
+	-- PlacedAt round-trip from the placed copy when present.
+	-- Evolution / trait fields live only on the owned record (the
+	-- placed copy never carries them), so they are copied through only
+	-- if a placed copy ever does — never blanked from the owned side.
+	owned.Level = tonumber(placed.Level) or tonumber(owned.Level) or 1
+	owned.Glitched = placed.Glitched == true
+	if (owned.Mutation == nil or owned.Mutation == "") and placed.Mutation ~= nil then
+		owned.Mutation = placed.Mutation
+	end
+	if placed.BankedIncome ~= nil then
+		owned.BankedIncome = tonumber(placed.BankedIncome) or 0
+	end
+	if placed.PlacedAt ~= nil then
+		owned.PlacedAt = tonumber(placed.PlacedAt) or owned.PlacedAt
+	end
+	for _, field in ipairs({ "Evolved", "EvolutionId", "EvolvedTrait", "EvolvedFormName", "TraitLevels" }) do
+		if placed[field] ~= nil then
+			owned[field] = placed[field]
+		end
+	end
+	local removed = BaseService.RemovePlaced(player, instanceId)
+	if removed == nil then
+		return false, "brainrot not placed"
+	end
+	print(string.format("[BaseService] %s stored %s from slot %d (plot %d)",
+		player.Name, tostring(owned.CharacterId), tonumber(placed.Slot) or 0, plotIndex))
+	return true, owned
 end
 
 -- -------------------------------------------------------------------------
@@ -1275,7 +1505,20 @@ function BaseService.UpgradeBase(player: Player, kind: any): (boolean, any)
 	if cost == nil then
 		return false, "max level reached"
 	end
+	-- R4-3: affordability is judged on SPENDABLE coins (balance
+	-- above any reservation held for a pending reward commit), not
+	-- the raw balance. AddCoins enforces the same floor as a
+	-- backstop, but the check here is what keeps the player from
+	-- being charged for an upgrade they cannot afford.
 	local coins = tonumber(data.Coins) or 0
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, spendable = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(spendable) == "number" then
+			coins = spendable
+		end
+	end
 	if coins < cost then
 		return false, "not enough coins"
 	end
@@ -1336,6 +1579,16 @@ function BaseService.UpgradeBrainrot(player: Player, instanceId: any): (boolean,
 		cost = tableRef[level]
 	end
 	local coins = tonumber(data.Coins) or 0
+	-- R4-3: see UpgradeBase — affordability is judged on spendable
+	-- coins (balance above any reservation), not the raw balance.
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, spendable = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(spendable) == "number" then
+			coins = spendable
+		end
+	end
 	if coins < (cost or 0) then
 		return false, "not enough coins"
 	end
@@ -1358,7 +1611,7 @@ end
 -- -------------------------------------------------------------------------
 
 local function onPlaceBrainrot(player: Player, instanceId: any, slot: any): ()
-	if rateLimited(player) then
+	if rateLimited(player, "place") then
 		return
 	end
 	local ok, success, reason = pcall(function()
@@ -1372,7 +1625,7 @@ local function onPlaceBrainrot(player: Player, instanceId: any, slot: any): ()
 end
 
 local function onCollectIncome(player: Player): ()
-	if rateLimited(player) then
+	if rateLimited(player, "collect") then
 		return
 	end
 	pcall(function()
@@ -1381,9 +1634,10 @@ local function onCollectIncome(player: Player): ()
 end
 
 local function onUpgradeBase(player: Player, kind: any): ()
-	if rateLimited(player) then
-		return
-	end
+	-- R3-8: Action envelopes for other services ({Action="Mutate"} /
+	-- {Action="Rebirth"}) share this remote and are not base upgrades:
+	-- they return BEFORE the throttle, so routing a mutate through
+	-- here no longer consumes the player's upgrade budget.
 	if type(kind) == "table" then
 		-- Other services share the UpgradeBase remote with Action
 		-- envelopes ({Action="Mutate"} / {Action="Rebirth"}); those are
@@ -1393,6 +1647,9 @@ local function onUpgradeBase(player: Player, kind: any): ()
 		else
 			return
 		end
+	end
+	if rateLimited(player, "upgradeBase") then
+		return
 	end
 	local ok, success, reason = pcall(function()
 		return BaseService.UpgradeBase(player, kind)
@@ -1405,12 +1662,12 @@ local function onUpgradeBase(player: Player, kind: any): ()
 end
 
 local function onUpgradeBrainrot(player: Player, instanceId: any): ()
-	if rateLimited(player) then
+	-- R3-8: see onUpgradeBase — Action envelopes ({Action="Mutate"} /
+	-- {Action="Fuse"}) return before the throttle.
+	if type(instanceId) == "table" and instanceId.Action ~= nil then
 		return
 	end
-	-- MutationService / FusionService share this remote with Action
-	-- envelopes ({Action="Mutate"} / {Action="Fuse"}); not a level-up.
-	if type(instanceId) == "table" and instanceId.Action ~= nil then
+	if rateLimited(player, "upgradeBrainrot") then
 		return
 	end
 	local ok, success, reason = pcall(function()
@@ -1423,6 +1680,20 @@ local function onUpgradeBrainrot(player: Player, instanceId: any): ()
 	end
 end
 
+local function onStoreBrainrot(player: Player, instanceId: any): ()
+	if rateLimited(player, "store") then
+		return
+	end
+	local ok, success, reason = pcall(function()
+		return BaseService.StoreBrainrot(player, instanceId)
+	end)
+	if not ok then
+		warn("[BaseService] StoreBrainrot error for " .. player.Name .. ": " .. tostring(success))
+	elseif not success then
+		warn("[BaseService] StoreBrainrot denied for " .. player.Name .. ": " .. tostring(reason))
+	end
+end
+
 function BaseService.Init(dataService: any, map: Model?): ()
 	assert(dataService ~= nil, "[BaseService] Init requires DataService")
 	_dataService = dataService
@@ -1432,15 +1703,17 @@ function BaseService.Init(dataService: any, map: Model?): ()
 		local collectRemote: RemoteEvent? = nil
 		local upgradeRemote: RemoteEvent? = nil
 		local upgradeBrainrotRemote: RemoteEvent? = nil
+		local storeRemote: RemoteEvent? = nil
 		local requestFn: RemoteFunction? = nil
 		for _ = 1, 50 do
 			placeRemote = placeRemote or getEvent(Remotes.Names.PlaceBrainrot)
 			collectRemote = collectRemote or getEvent(Remotes.Names.CollectIncome)
 			upgradeRemote = upgradeRemote or getEvent(Remotes.Names.UpgradeBase)
 			upgradeBrainrotRemote = upgradeBrainrotRemote or getEvent(Remotes.Names.UpgradeBrainrot)
+			storeRemote = storeRemote or getEvent(Remotes.Names.StoreBrainrot)
 			requestFn = requestFn or getFunction(Remotes.Names.RequestBase)
 			if placeRemote ~= nil and collectRemote ~= nil and upgradeRemote ~= nil
-				and upgradeBrainrotRemote ~= nil and requestFn ~= nil then
+				and upgradeBrainrotRemote ~= nil and storeRemote ~= nil and requestFn ~= nil then
 				break
 			end
 			task.wait(0.2)
@@ -1464,6 +1737,11 @@ function BaseService.Init(dataService: any, map: Model?): ()
 			upgradeBrainrotRemote.OnServerEvent:Connect(onUpgradeBrainrot)
 		else
 			warn("[BaseService] UpgradeBrainrot remote not available")
+		end
+		if storeRemote ~= nil then
+			storeRemote.OnServerEvent:Connect(onStoreBrainrot)
+		else
+			warn("[BaseService] StoreBrainrot remote not available")
 		end
 		if requestFn ~= nil then
 			requestFn.OnServerInvoke = function(player: Player)

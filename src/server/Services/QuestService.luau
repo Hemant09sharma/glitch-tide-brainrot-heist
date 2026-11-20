@@ -324,6 +324,49 @@ function QuestService.GetQuests(player: Player): { any }
 	return out
 end
 
+-- EVENT_KIND_MAP: which achievement / challenge kind a quest event
+-- also advances. This is the SINGLE funnel: RecordEvent is the only
+-- place that forwards to achievements / challenges, so a tide that
+-- fires both survive_tide AND survive_meteor_tide still counts ONCE
+-- toward tide_survived (only survive_tide maps to it; the variant
+-- events are quest-only). ReportProgress maps kind/id -> events and
+-- calls RecordEvent, so it can never double-count either.
+-- (Defined above RecordEvent: RecordEvent calls forwardProgress, and
+-- under --!strict a local must be declared before first use.)
+local EVENT_KIND_MAP: { [string]: string } = {
+	survive_tide = "tide_survived",
+	survive_flawless = "tide_flawless",
+	defeat_boss = "boss_defeated",
+	boss_participate = "boss_participated",
+	fuse = "fusion",
+	mutate = "mutation",
+	evolve = "evolution",
+	trait_upgrade = "trait",
+	complete_expedition = "expedition",
+	discover_secret = "secret",
+	capture_territory = "territory",
+	participate_event = "event",
+	buy_brainrot = "first_buy",
+	place_brainrot = "first_place",
+}
+
+local function forwardProgress(player: Player, eventName: string, delta: number)
+	local kind = EVENT_KIND_MAP[eventName]
+	if kind == nil then
+		return
+	end
+	if _achievementService and type(_achievementService.CheckProgress) == "function" then
+		pcall(function()
+			_achievementService.CheckProgress(player, kind, delta)
+		end)
+	end
+	if _progressionService and type(_progressionService.CheckChallenge) == "function" then
+		pcall(function()
+			_progressionService.CheckChallenge(player, kind, delta)
+		end)
+	end
+end
+
 -- RecordEvent(player, eventName, amount): advance every quest listening
 -- to `eventName`. GameManager / other services call this on buy, place,
 -- steal, defend, mutate, fuse, NPC defeat, boss defeat, tide survival
@@ -372,47 +415,6 @@ function QuestService.RecordEvent(player: Player, eventName: any, amount: any)
 	forwardProgress(player, eventName, delta)
 	if changed then
 		pushProgress(player)
-	end
-end
-
--- EVENT_KIND_MAP: which achievement / challenge kind a quest event
--- also advances. This is the SINGLE funnel: RecordEvent is the only
--- place that forwards to achievements / challenges, so a tide that
--- fires both survive_tide AND survive_meteor_tide still counts ONCE
--- toward tide_survived (only survive_tide maps to it; the variant
--- events are quest-only). ReportProgress maps kind/id -> events and
--- calls RecordEvent, so it can never double-count either.
-local EVENT_KIND_MAP: { [string]: string } = {
-	survive_tide = "tide_survived",
-	survive_flawless = "tide_flawless",
-	defeat_boss = "boss_defeated",
-	boss_participate = "boss_participated",
-	fuse = "fusion",
-	mutate = "mutation",
-	evolve = "evolution",
-	trait_upgrade = "trait",
-	complete_expedition = "expedition",
-	discover_secret = "secret",
-	capture_territory = "territory",
-	participate_event = "event",
-	buy_brainrot = "first_buy",
-	place_brainrot = "first_place",
-}
-
-local function forwardProgress(player: Player, eventName: string, delta: number)
-	local kind = EVENT_KIND_MAP[eventName]
-	if kind == nil then
-		return
-	end
-	if _achievementService and type(_achievementService.CheckProgress) == "function" then
-		pcall(function()
-			_achievementService.CheckProgress(player, kind, delta)
-		end)
-	end
-	if _progressionService and type(_progressionService.CheckChallenge) == "function" then
-		pcall(function()
-			_progressionService.CheckChallenge(player, kind, delta)
-		end)
 	end
 end
 
@@ -626,14 +628,24 @@ local function onClaim(player: Player, payload: any)
 	if not player or not player:IsA("Player") then
 		return
 	end
-	-- Shared with the core-loop income handler: only our Action envelope.
-	if type(payload) ~= "table" or payload.Action ~= "ClaimQuest" then
+	-- ClaimQuest is a dedicated RemoteEvent (not shared with the
+	-- core-loop income handler). Two payload shapes are accepted:
+	--   { Action = "ClaimQuest", QuestId = <id> }  (current client)
+	--   "<questId>"                                 (legacy bare string)
+	-- Anything else is ignored. QuestId validation (non-empty string,
+	-- known quest) happens inside ClaimQuest via sanitize + _byId.
+	local questId: any = nil
+	if type(payload) == "table" and payload.Action == "ClaimQuest" then
+		questId = payload.QuestId
+	elseif type(payload) == "string" then
+		questId = payload
+	else
 		return
 	end
 	if not rateOk(player, "ClaimQuest", 1) then
 		return
 	end
-	local ok, err = QuestService.ClaimQuest(player, payload.QuestId)
+	local ok, err = QuestService.ClaimQuest(player, questId)
 	if not ok then
 		warn("[QuestService] Claim failed for " .. player.Name .. ": " .. tostring(err))
 	end

@@ -101,6 +101,13 @@ local deathScreen = nil
 local victoryScreen = nil
 local victoryLabel = nil
 local welcomeShown = false
+-- R4-8: persistent save warning (SaveWarning remote): shown when
+-- the server reports this session cannot save (load failed, or
+-- another server holds the session lease). Unlike the event banner
+-- it never auto-hides — the warning is true for the whole session.
+local saveWarningFrame = nil
+local saveWarningLabel = nil
+local saveWarningShown = false
 
 local maxHealth = 100
 local currentHealth = 100
@@ -457,6 +464,30 @@ function HUDController.ShowVictoryScreen(variation, rewardMultiplier)
 			victoryScreen.Visible = false
 		end
 	end)
+end
+
+-- R4-8: persistent save warning. The server fires SaveWarning when
+-- this session cannot save (load failed, or another server holds the
+-- session lease); the banner stays visible for the whole session so
+-- the player knows nothing they earn will persist. Pass nil/"" to
+-- hide. Safe to call before build() — it no-ops until the frame
+-- exists, and IsSaveWarningShown reports the state for tests.
+function HUDController.ShowSaveWarning(text)
+	if not saveWarningFrame or not saveWarningLabel then
+		return
+	end
+	if not text or text == "" then
+		saveWarningFrame.Visible = false
+		saveWarningShown = false
+		return
+	end
+	saveWarningLabel.Text = tostring(text)
+	saveWarningFrame.Visible = true
+	saveWarningShown = true
+end
+
+function HUDController.IsSaveWarningShown()
+	return saveWarningShown
 end
 
 -- One-line event banner under the tide banner (e.g. double-income
@@ -951,6 +982,26 @@ local function build()
 	eventLabel.Position = UDim2.new(0, 8, 0, 0)
 	eventLabel.TextXAlignment = Enum.TextXAlignment.Center
 
+	-- ---- Save warning banner (R4-8, under the event banner) ---------
+	-- Persistent red banner: "your save could not be loaded / another
+	-- server owns this session — nothing will be saved". Hidden until
+	-- the server fires SaveWarning; never auto-hides.
+	saveWarningFrame = Instance.new("Frame")
+	saveWarningFrame.Name = "SaveWarning"
+	saveWarningFrame.Size = UDim2.new(0, 460, 0, 44)
+	saveWarningFrame.Position = UDim2.new(0.5, -230, 0, 194)
+	saveWarningFrame.BackgroundColor3 = Color3.fromRGB(140, 20, 20)
+	saveWarningFrame.BorderSizePixel = 0
+	saveWarningFrame.Visible = false
+	saveWarningFrame.Parent = gui
+	corner(saveWarningFrame, 8)
+	stroke(saveWarningFrame, Color3.fromRGB(255, 80, 80), 1).Transparency = 0.3
+	saveWarningLabel = makeLabel(saveWarningFrame, "", 12, Color3.fromRGB(255, 255, 255), true)
+	saveWarningLabel.Size = UDim2.new(1, -16, 1, 0)
+	saveWarningLabel.Position = UDim2.new(0, 8, 0, 0)
+	saveWarningLabel.TextXAlignment = Enum.TextXAlignment.Center
+	saveWarningLabel.TextWrapped = true
+
 	-- ---- Boss health bar (under the event banner, v1.1 E) --------------
 	bossBarFrame = Instance.new("Frame")
 	bossBarFrame.Name = "BossBar"
@@ -1283,6 +1334,26 @@ function HUDController.Init()
 		local statsRemote = remotes:FindFirstChild("PlayerStats")
 		if statsRemote and statsRemote:IsA("RemoteEvent") then
 			(statsRemote :: RemoteEvent).OnClientEvent:Connect(applyPlayerStats)
+		end
+
+		-- R4-8: save warning. The server fires SaveWarning on join
+		-- when this session cannot save (load failed, or another
+		-- server holds the session lease): {Reason, Message}. The
+		-- banner is persistent — it stays up for the whole session,
+		-- because the warning is true until the player rejoins.
+		local saveWarningRemote = remotes:FindFirstChild("SaveWarning")
+		if saveWarningRemote and saveWarningRemote:IsA("RemoteEvent") then
+			(saveWarningRemote :: RemoteEvent).OnClientEvent:Connect(function(payload: any)
+				local text: string? = nil
+				if typeof(payload) == "table" then
+					text = payload.Message or payload.message
+				elseif typeof(payload) == "string" then
+					text = payload
+				end
+				if text ~= nil and text ~= "" then
+					HUDController.ShowSaveWarning(text)
+				end
+			end)
 		end
 
 		-- Damage numbers landing on this player also flash the vignette lightly,

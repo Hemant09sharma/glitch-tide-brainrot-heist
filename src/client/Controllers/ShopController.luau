@@ -175,6 +175,19 @@ local function setStatus(text: string, isError: boolean?)
 	end
 end
 
+-- R4-5: a BaseUpdate payload is a full base snapshot only when it
+-- carries a Placed list (same predicate BaseController.ApplyBaseUpdate
+-- uses since R3-7). Action-only event payloads — FusionService's
+-- FusionResult, or any future partial on this remote — have no
+-- Placed list and must never replace canonical shop state.
+local function isFullSnapshot(data: any): boolean
+	if typeof(data) ~= "table" then
+		return false
+	end
+	local placed = data.Placed or data.placed or data.Brainrots
+	return typeof(placed) == "table"
+end
+
 local function upgradeLevel(kind: string): number
 	if typeof(baseState) == "table" then
 		local upgrades = baseState.Upgrades or baseState.upgrades
@@ -850,36 +863,54 @@ end
 
 -- Called by BaseController / HUD when a server push arrives, so a
 -- confirmed purchase clears its watchdog and refreshes the rows.
+--
+-- R4-5: only a FULL snapshot may replace canonical shop state
+-- (baseState / placedList / unplacedList). The old code did
+-- `baseState = data` unconditionally, so FusionService's bare
+-- FusionResult partial overwrote the full state — upgrade levels
+-- read 0 (no Upgrades table in the partial) and the placed list
+-- vanished until the next full snapshot. A partial payload is now
+-- handled as an event only: FusionResult still clears the fuse
+-- watchdog and reports the result, but touches no state, and it
+-- clears ONLY the fusion watchdogs — a partial must not confirm
+-- unrelated pending purchases. A full snapshot keeps the old
+-- behaviour of confirming every pending purchase.
 function ShopController.OnBaseUpdate(data: any)
-	if typeof(data) == "table" then
+	if typeof(data) ~= "table" then
+		return
+	end
+	if isFullSnapshot(data) then
 		baseState = data
 		local placed = data.Placed or data.placed or data.Brainrots
-		if typeof(placed) == "table" then
-			placedList = placed
-		end
+		placedList = placed
 		local unplaced = data.Unplaced or data.unplaced
 		if typeof(unplaced) == "table" then
 			unplacedList = unplaced
 		end
-		-- A fusion result arrives as a BaseUpdate with Action =
-		-- "FusionResult" (FusionService): clear the fuse watchdog and
-		-- report the result instead of leaving "waiting for server…".
-		if data.Action == "FusionResult" then
-			for key, _ in pending do
-				if string.sub(key, 1, 7) == "fusion:" then
-					pending[key] = nil
-				end
+		-- A fresh full snapshot confirms every pending purchase
+		-- (pre-existing behaviour, preserved).
+		for key, _ in pending do
+			if string.sub(key, 1, 8) == "upgrade:" or string.sub(key, 1, 8) == "brainrot" or string.sub(key, 1, 7) == "mutate:" or string.sub(key, 1, 7) == "fusion:" then
+				pending[key] = nil
 			end
-			fuseA = nil
-			fuseB = nil
-			local resultName = tostring(data.CharacterId or "?")
-			setStatus("Fusion succeeded — " .. resultName .. " joined your inventory!")
 		end
 	end
-	for key, _ in pending do
-		if string.sub(key, 1, 8) == "upgrade:" or string.sub(key, 1, 8) == "brainrot" or string.sub(key, 1, 7) == "mutate:" or string.sub(key, 1, 7) == "fusion:" then
-			pending[key] = nil
+	-- A fusion result arrives with Action = "FusionResult", either
+	-- on a full snapshot (the normal R4-5 server path) or as a bare
+	-- partial (the degraded PlayerStats fallback, routed here by the
+	-- PlayerStats listener below). Either way: clear the fuse
+	-- watchdog and report the result instead of leaving "waiting
+	-- for server…". State is untouched for the partial shape.
+	if data.Action == "FusionResult" then
+		for key, _ in pending do
+			if string.sub(key, 1, 7) == "fusion:" then
+				pending[key] = nil
+			end
 		end
+		fuseA = nil
+		fuseB = nil
+		local resultName = tostring(data.CharacterId or "?")
+		setStatus("Fusion succeeded — " .. resultName .. " joined your inventory!")
 	end
 	if isOpen then
 		ShopController.Rebuild()
@@ -1019,6 +1050,15 @@ function ShopController.Init()
 		local statsRemote = folder:FindFirstChild(remoteName("PlayerStats", "PlayerStats"))
 		if statsRemote and statsRemote:IsA("RemoteEvent") then
 			(statsRemote :: RemoteEvent).OnClientEvent:Connect(function(payload: any)
+				-- R4-5 degraded path: FusionService falls back to
+				-- PlayerStats when it cannot build a full snapshot.
+				-- Route the result through OnBaseUpdate, which
+				-- treats a bare partial as a notification only (no
+				-- state is overwritten) and clears the fuse watchdog.
+				if typeof(payload) == "table" and payload.Action == "FusionResult" then
+					ShopController.OnBaseUpdate(payload)
+					return
+				end
 				if typeof(payload) == "table" and typeof(payload.Coins) == "number" then
 					knownCoins = payload.Coins
 					if coinsLabel then

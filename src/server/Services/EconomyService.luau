@@ -264,6 +264,16 @@ function EconomyService.BuyCharacter(player, characterId)
 	end
 	local cost = tonumber(character.Cost) or 0
 	local coins = tonumber(data.Coins) or 0
+	-- R4-3: affordability is judged on spendable coins (balance
+	-- above any reservation held for a pending reward commit).
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, spendable = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(spendable) == "number" then
+			coins = spendable
+		end
+	end
 	if coins < cost then
 		return false, "not enough coins"
 	end

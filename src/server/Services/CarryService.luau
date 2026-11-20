@@ -23,6 +23,10 @@ local CarryService = {}
 local _dataService: any = nil
 local _baseService: any = nil
 local _raidService: any = nil
+-- Declared here with the other service locals: applyCarrySpeed (below)
+-- reads it, so a declaration after that function would resolve to a
+-- nil global and the companion CarrySpeed bonus would never apply.
+local _companionService: any = nil
 local _running = false
 
 local _carrying: { [Player]: { [string]: any } } = {}
@@ -139,6 +143,20 @@ local function getRoot(player: Player): BasePart?
 		return root
 	end
 	return nil
+end
+
+-- Theft / expedition integrity: a stolen in-transit instance or an
+-- instance away on an expedition must not be picked up and carried —
+-- carrying it would let the holder place / deliver a Brainrot whose
+-- ownership is unresolved. Returns (true, reason) when locked.
+local function transitLocked(record: { [string]: any }): (boolean, string?)
+	if record.InTransit == true then
+		return true, "brainrot is in transit (stolen)"
+	end
+	if record.OnExpedition == true then
+		return true, "brainrot is on an expedition"
+	end
+	return false, nil
 end
 
 local function applyCarrySpeed(player: Player, carrying: boolean): ()
@@ -261,16 +279,27 @@ function CarryService.PickupOwned(player: Player, owned: { [string]: any }): (bo
 	end
 	local data = _dataService.GetOrLoad(player)
 	local found = false
+	local live: { [string]: any }? = nil
 	if type(data.OwnedInstances) == "table" then
 		for _, record in ipairs(data.OwnedInstances) do
 			if record.InstanceId == owned.InstanceId then
 				found = true
+				live = record
 				break
 			end
 		end
 	end
 	if not found then
 		return false, "brainrot not owned"
+	end
+	-- Theft / expedition integrity: check the live owned record (the
+	-- passed table may be a stale copy) as well as the passed table.
+	local locked, lockReason = transitLocked(owned)
+	if not locked and live ~= nil then
+		locked, lockReason = transitLocked(live)
+	end
+	if locked then
+		return false, lockReason
 	end
 	-- Never carry something that is placed in a base.
 	if owned.Placed == true then
@@ -390,7 +419,6 @@ end
 -- v1.1 companion CarrySpeed: CompanionService.GetCarrySpeedMultiplier
 -- (Config base 0.6 + bonus, capped at 0.75). Wired via GameManager's
 -- wireCrossLinks (SetCompanionService is in its shared table).
-local _companionService: any = nil
 function CarryService.SetCompanionService(companionService: any): ()
 	if companionService and type(companionService.GetCarrySpeedMultiplier) == "function" then
 		_companionService = companionService
@@ -591,6 +619,13 @@ function CarryService.PickupBrainrot(player: Player, instanceId: any): (boolean,
 		if owned == nil then
 			return false, "brainrot not owned"
 		end
+		-- Theft / expedition integrity (also enforced in PickupOwned
+		-- below; checked here so a dropped in-transit record is
+		-- rejected at this entry point too).
+		local locked, lockReason = transitLocked(owned)
+		if locked then
+			return false, lockReason
+		end
 		return CarryService.PickupOwned(player, owned)
 	end
 
@@ -607,6 +642,10 @@ function CarryService.PickupBrainrot(player: Player, instanceId: any): (boolean,
 	end
 	if owned == nil then
 		return false, "brainrot not owned"
+	end
+	local locked2, lockReason2 = transitLocked(owned)
+	if locked2 then
+		return false, lockReason2
 	end
 	return CarryService.PickupOwned(player, owned)
 end

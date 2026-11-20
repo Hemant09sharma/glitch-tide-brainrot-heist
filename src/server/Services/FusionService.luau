@@ -39,6 +39,21 @@
 -- REMOTE: FuseBrainrot exists in Remotes.Names (RemoteEvent), so the
 -- handler binds to it directly (UpgradeBrainrot is only the fallback
 -- if the name ever disappears).
+--
+-- R4-5: the fusion result used to fire as a bare partial payload
+-- {Action="FusionResult", ...} through BaseUpdate, and
+-- ShopController.OnBaseUpdate assigned baseState = data
+-- unconditionally — so the partial overwrote the shop's full base
+-- state (upgrade levels read 0 until the next full snapshot). The
+-- result now rides ON a full BaseService.GetBase snapshot fired
+-- through BaseUpdate (same pattern as R3-7's MutationApplied fix),
+-- so every BaseUpdate fire is a valid snapshot. If no snapshot can
+-- be built (no BaseService link, or no BaseUpdate remote), the
+-- result falls back to the PlayerStats remote as a notification
+-- only — it never goes through BaseUpdate as a bare partial, and
+-- the shop's PlayerStats listener handles it without touching
+-- base state. Server-side purchase validation is unchanged and
+-- remains authoritative.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -55,6 +70,7 @@ local FusionService = {}
 local _dataService: any = nil
 local _mutationService: any = nil
 local _questService: any = nil
+local _baseService: any = nil
 
 local _rate: { [Player]: number } = {}
 
@@ -137,6 +153,26 @@ local function getData(player: Player): any
 	return nil
 end
 
+-- R4-3: spendable balance — the raw balance minus any reservation
+-- held for a pending reward commit (DataService.ReserveCoins).
+-- Falls back to the raw balance when the DataService has no
+-- reservation API (older stub). The charge below goes through
+-- DataService.AddCoins, which enforces the same floor as a
+-- backstop, so a reserved reward credit can never be spent here
+-- while its commit's save is in flight.
+local function spendableCoins(player: Player, data: any): number
+	local coins = tonumber(data.Coins) or 0
+	if _dataService and type(_dataService.GetSpendableCoins) == "function" then
+		local ok, value = pcall(function()
+			return _dataService.GetSpendableCoins(player)
+		end)
+		if ok and type(value) == "number" then
+			return value
+		end
+	end
+	return coins
+end
+
 local function resolveMutationService(): any
 	if _mutationService and type(_mutationService.FindInstance) == "function"
 		and type(_mutationService.CreateInstance) == "function"
@@ -158,6 +194,37 @@ local function resolveMutationService(): any
 		end
 	end)
 	return _mutationService
+end
+
+-- SetBaseService(baseService): optional link used ONLY to build the
+-- full base snapshot the fusion result rides on (R4-5). GameManager's
+-- cross-link pass calls this setter automatically when BaseService is
+-- loaded (it tryWires SetBaseService on every optional service); the
+-- lazy sibling require below covers the case where the setter was
+-- never called. Without a BaseService the fusion still succeeds —
+-- the result falls back to the PlayerStats notification path.
+function FusionService.SetBaseService(baseService: any)
+	if baseService and type(baseService.GetBase) == "function" then
+		_baseService = baseService
+	end
+end
+
+local function resolveBaseService(): any
+	if _baseService and type(_baseService.GetBase) == "function" then
+		return _baseService
+	end
+	-- Same lazy sibling fallback as resolveMutationService above.
+	_baseService = nil
+	pcall(function()
+		local mod = script.Parent:FindFirstChild("BaseService")
+		if mod then
+			local candidate = require(mod)
+			if type(candidate.GetBase) == "function" then
+				_baseService = candidate
+			end
+		end
+	end)
+	return _baseService
 end
 
 -- FuseBrainrot(player, instanceIdA, instanceIdB): server-validated,
@@ -183,6 +250,18 @@ function FusionService.FuseBrainrot(player: Player, instanceIdA: any, instanceId
 	end
 	if instA.Placed or instB.Placed then
 		return false, "both instances must be unplaced (fuse from inventory)", nil
+	end
+	-- Theft integrity: an in-transit (stolen) or on-expedition
+	-- instance must never be consumed. A stolen record has
+	-- Placed=false, so the check above does not catch it — without
+	-- this guard, fusing it and then dying/dropping it lets
+	-- ReturnStolen recreate the victim's copy while the thief keeps
+	-- the fusion output (one instance becomes two).
+	if instA.InTransit == true or instB.InTransit == true then
+		return false, "instance is in transit (stolen)", nil
+	end
+	if instA.OnExpedition == true or instB.OnExpedition == true then
+		return false, "instance is on an expedition", nil
 	end
 	local characterIdA = instA.CharacterId
 	local characterIdB = instB.CharacterId
@@ -210,9 +289,8 @@ function FusionService.FuseBrainrot(player: Player, instanceIdA: any, instanceId
 	if not data then
 		return false, "no data", nil
 	end
-	local coins = tonumber(data.Coins) or 0
 	local crystals = tonumber(data.MutationCrystals) or 0
-	if coins < cost.Coins then
+	if spendableCoins(player, data) < cost.Coins then
 		return false, "not enough coins for fusion", nil
 	end
 	if crystals < cost.MutationCrystals then
@@ -221,7 +299,13 @@ function FusionService.FuseBrainrot(player: Player, instanceIdA: any, instanceId
 
 	-- Charge, then consume BOTH inputs, then grant the output, in one
 	-- server step — a crash / double-fire can never duplicate.
-	data.Coins = coins - cost.Coins
+	-- R4-3: charge through DataService.AddCoins, never by direct
+	-- assignment — AddCoins clamps a debit at the reserved total, so
+	-- a pending reward commit's reserved credit cannot be spent here
+	-- (the affordability check above already judged spendable coins;
+	-- the floor is the backstop). Init guarantees _dataService, and
+	-- getData succeeding above proves it is set.
+	_dataService.AddCoins(player, -cost.Coins)
 	data.MutationCrystals = crystals - cost.MutationCrystals
 	ms.RemoveInstance(player, idA)
 	ms.RemoveInstance(player, idB)
@@ -229,7 +313,9 @@ function FusionService.FuseBrainrot(player: Player, instanceIdA: any, instanceId
 	if not output then
 		-- Extremely defensive: refund the cost AND restore the inputs
 		-- rather than ever silently eating a player's Brainrots.
-		data.Coins = (tonumber(data.Coins) or 0) + cost.Coins
+		-- R4-3: refund through AddCoins as well (same table, same
+		-- floor semantics as the charge).
+		_dataService.AddCoins(player, cost.Coins)
 		data.MutationCrystals = (tonumber(data.MutationCrystals) or 0) + cost.MutationCrystals
 		ms.CreateInstance(player, characterIdA, tonumber(instA.Level) or 1, instA.Mutation)
 		ms.CreateInstance(player, characterIdB, tonumber(instB.Level) or 1, instB.Mutation)
@@ -246,7 +332,15 @@ function FusionService.FuseBrainrot(player: Player, instanceIdA: any, instanceId
 			_dataService.SaveData(player)
 		end)
 	end)
-	local payload = {
+	-- R4-5: the result rides ON a full base snapshot, never as a bare
+	-- partial. GetBase returns a fresh table per call, so attaching
+	-- the result fields cannot mutate any cached snapshot. The
+	-- snapshot carries Placed / Unplaced / BankedIncome / Slots /
+	-- IncomePerSec plus the flat upgrade levels, so the client's
+	-- full-state assignment stays valid and the fuse watchdog still
+	-- clears (ShopController keys the notification off
+	-- Action == "FusionResult" on either shape).
+	local resultFields = {
 		Action = "FusionResult",
 		Outcome = "Recipe",
 		RecipeHint = recipe.Hint,
@@ -257,10 +351,30 @@ function FusionService.FuseBrainrot(player: Player, instanceIdA: any, instanceId
 		Consumed = { idA, idB },
 		Cost = cost,
 	}
-	if getRemote(_names.BaseUpdate) then
-		fireClient(_names.BaseUpdate, player, payload)
+	local snapshot: any = nil
+	local bs = resolveBaseService()
+	if bs and type(bs.GetBase) == "function" then
+		local ok, snap = pcall(function()
+			return bs.GetBase(player)
+		end)
+		if ok and type(snap) == "table" then
+			snapshot = snap
+		end
+	end
+	if snapshot ~= nil and getRemote(_names.BaseUpdate) then
+		for key, value in resultFields do
+			snapshot[key] = value
+		end
+		fireClient(_names.BaseUpdate, player, snapshot)
 	else
-		fireClient(_names.PlayerStats, player, payload)
+		-- Degraded path: no BaseService link, snapshot build failed,
+		-- or no BaseUpdate remote. The result still reaches the
+		-- client, but on PlayerStats as a notification only — never
+		-- as a bare partial on BaseUpdate, where it used to corrupt
+		-- the shop's base state. ShopController's PlayerStats
+		-- listener clears the fuse watchdog for it and touches no
+		-- base state.
+		fireClient(_names.PlayerStats, player, resultFields)
 	end
 	if _questService and type(_questService.RecordEvent) == "function" then
 		pcall(function()

@@ -5,14 +5,35 @@
 -- fixed duration; claim real rewards on return. All expedition tunables
 -- live in shared/ExpeditionDefs.luau.
 --
--- RULES (server-authoritative): the instance must be owned, unplaced
--- and not already away; one active expedition per player. While away
+-- RULES (server-authoritative): the instance must be owned, unplaced,
+-- not already away, and NOT in transit (a stolen Brainrot mid-theft
+-- carries InTransit = true; it is ineligible for expeditions and
+-- StartExpedition rejects it server-side — the UI list is not the
+-- enforcement point). One active expedition per player. While away
 -- the instance is flagged OnExpedition (the expedition API refuses to
 -- start a second trip with it, and GetExpeditions reports it — the
 -- Wave 3 UI must hide on-expedition instances from place / fuse /
 -- mutate lists, because BaseService / MutationService / FusionService
 -- were not edited by this workstream and do not read the flag; see
--- docs/QA_V11_C.md). RISK is a chance of REDUCED rewards on claim
+-- docs/QA_V11_C.md).
+--
+-- ORPHANED-FLAG RECOVERY (R2-2 / P0-3): a pre-fix expedition started
+-- with a stolen record left OnExpedition = true on the instance while
+-- the Active entry lived in the thief's data, so ReturnStolen moved
+-- the record back with the flag set and the victim had no Active
+-- expedition to claim — a permanent lock. The fix prevents new cases
+-- (InTransit guards below) and
+-- ExpeditionService.ClearOrphanedExpeditionFlag(player, instanceId)
+-- recovers old ones: it clears OnExpedition only when the player has
+-- NO Active expedition for that instance. INTENDED CALL SITE:
+-- RaidService.ReturnStolen, after the owned record has committed back
+-- to the victim and InTransit is cleared, call
+-- ExpeditionService.ClearOrphanedExpeditionFlag(victim, instanceId)
+-- (best-effort pcall; the helper itself is a no-op when an Active
+-- expedition legitimately exists for the instance, so it is safe to
+-- call unconditionally on every return).
+--
+-- RISK is a chance of REDUCED rewards on claim
 -- (half coins / crystals, no gems / shards / discovery) — the
 -- Brainrot NEVER gets lost. Rewards: coins (DataService.AddCoins),
 -- gems / crystals / shards (direct field writes, audit §4f), XP
@@ -300,7 +321,7 @@ function ExpeditionService.GetExpeditions(player: Player): { [string]: any }
 			for _, def in ipairs(ExpeditionDefs.GetAll()) do
 				local list: { string } = {}
 				for _, inst in ipairs(instances) do
-					if type(inst) == "table" and inst.Placed ~= true and inst.OnExpedition ~= true then
+					if type(inst) == "table" and inst.Placed ~= true and inst.OnExpedition ~= true and inst.InTransit ~= true then
 						local charDef = Characters.GetById(inst.CharacterId)
 						if charDef then
 							local levelOk = (tonumber(inst.Level) or 1) >= def.MinLevel
@@ -370,6 +391,15 @@ function ExpeditionService.StartExpedition(player: Player, instanceId: any, expe
 	end
 	if inst.OnExpedition == true then
 		return false, "instance is already on an expedition"
+	end
+	-- R2-2 / P0-3: a stolen Brainrot in transit must never start an
+	-- expedition. The record sits in the thief's OwnedInstances with
+	-- InTransit = true, so FindInstance above returns it — without
+	-- this check the thief could lock the victim's Brainrot behind an
+	-- Active entry the victim cannot claim. This check runs before
+	-- ANY mutation below (no Active entry, no flag set, no rewards).
+	if inst.InTransit == true then
+		return false, "instance is in transit and cannot be sent on an expedition"
 	end
 	local charDef = Characters.GetById(inst.CharacterId)
 	if not charDef then
@@ -446,6 +476,33 @@ function ExpeditionService.ClaimExpedition(player: Player, expeditionId: any): (
 	local ms = resolveMutationService()
 	local inst = ms and ms.FindInstance(player, tostring(active.InstanceId)) or nil
 
+	-- Defensive claim path (R2-2): never pay for a Brainrot the
+	-- claimant does not currently own, and never leave a flag set on
+	-- an instance the claimant has no Active expedition for.
+	--   * In transit (mid-theft): refuse without mutating anything —
+	--     no rewards, Active kept, flag untouched. After ReturnStolen
+	--     moves the record back to the victim, the thief no longer
+	--     owns it and the next branch applies.
+	--   * No longer owned at all (consumed / moved away while the
+	--     Active entry survived, e.g. a pre-fix orphan): drop the
+	--     stale Active entry WITHOUT paying — a claim must not mint
+	--     rewards for a Brainrot the claimant does not have — and
+	--     without incrementing Completed. This unblocks the player
+	--     for future expeditions instead of leaving Active stuck.
+	if inst and inst.InTransit == true then
+		return false, "expedition brainrot is in transit"
+	end
+	if not inst then
+		data.Expeditions.Active = nil
+		task.spawn(function()
+			pcall(function()
+				_dataService.SaveData(player)
+			end)
+		end)
+		pushExpeditionUpdate(player, { Action = "ExpeditionAbandoned", ExpeditionId = cleanExp })
+		return false, "expedition brainrot no longer owned"
+	end
+
 	-- Risk roll: reduced rewards, never loss of the Brainrot.
 	local reduced = math.random() < def.Risk
 	local coins = reduced and math.floor(def.RewardCoins / 2) or def.RewardCoins
@@ -520,6 +577,66 @@ function ExpeditionService.ClaimExpedition(player: Player, expeditionId: any): (
 		discoveryId and (" discovered " .. discoveryId) or ""
 	))
 	return true, rewards
+end
+
+-- ---------------------------------------------------------------------------
+-- Orphaned-expedition-flag recovery (R2-2 / P0-3)
+-- ---------------------------------------------------------------------------
+
+-- HasActiveExpedition(player, instanceId): true iff the player has an
+-- Active expedition entry for exactly this instance.
+function ExpeditionService.HasActiveExpedition(player: Player, instanceId: any): boolean
+	if not player or not player:IsA("Player") then
+		return false
+	end
+	local cleanId = sanitize(instanceId)
+	if not cleanId then
+		return false
+	end
+	local data = ensureExpeditionData(player)
+	if not data then
+		return false
+	end
+	local active = data.Expeditions.Active
+	return type(active) == "table" and tostring(active.InstanceId) == cleanId
+end
+
+-- ClearOrphanedExpeditionFlag(player, instanceId): clear a stale
+-- OnExpedition flag on an instance the player has NO Active
+-- expedition for. Returns true iff a flag was actually cleared.
+-- Safe no-op (returns false, changes nothing) when:
+--   * the player HAS an Active expedition for this instance (a live
+--     trip — the flag is legitimate and must stay), or
+--   * the instance does not exist / has no flag set.
+-- INTENDED CALL SITE (RaidService worker): RaidService.ReturnStolen,
+-- after the owned record has committed back to the victim and
+-- InTransit is cleared — call
+--   ExpeditionService.ClearOrphanedExpeditionFlag(victim, instanceId)
+-- (best-effort pcall; RaidService must require ExpeditionService or
+-- receive it via a setter — this helper is exported for exactly that
+-- call). This recovers Brainrots locked by pre-fix expeditions
+-- started with stolen records; it cannot touch a live expedition.
+function ExpeditionService.ClearOrphanedExpeditionFlag(player: Player, instanceId: any): boolean
+	if not player or not player:IsA("Player") then
+		return false
+	end
+	local cleanId = sanitize(instanceId)
+	if not cleanId then
+		return false
+	end
+	if ExpeditionService.HasActiveExpedition(player, cleanId) then
+		return false
+	end
+	local ms = resolveMutationService()
+	if not ms then
+		return false
+	end
+	local inst = ms.FindInstance(player, cleanId)
+	if not inst or inst.OnExpedition ~= true then
+		return false
+	end
+	inst.OnExpedition = nil
+	return true
 end
 
 -- ---------------------------------------------------------------------------
