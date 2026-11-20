@@ -1,5 +1,11 @@
 # GLITCH TIDE — BRAINROT HEIST: THE MEMEVERSE
 
+[![roblox-brainrot-01](https://make.fun/badge/roblox-brainrot-01.svg)](https://make.fun/bounty/roblox-brainrot-01)
+[![rank](https://make.fun/badge/roblox-brainrot-01/Hemant09sharma/glitch-tide-brainrot-heist/rank.svg)](https://make.fun/bounty/roblox-brainrot-01)
+[![reward](https://make.fun/badge/roblox-brainrot-01/Hemant09sharma/glitch-tide-brainrot-heist/reward.svg)](https://make.fun/bounty/roblox-brainrot-01)
+
+Entered on [make.fun](https://make.fun/bounty/roblox-brainrot-01).
+
 > **COLLECT THE CHAOS. BUILD YOUR EMPIRE. SURVIVE THE TIDE.**
 
 A multiplayer Roblox heist-tycoon game. Buy Brainrots from a shared conveyor,

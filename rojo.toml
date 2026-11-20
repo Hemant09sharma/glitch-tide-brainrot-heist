@@ -4,7 +4,7 @@
 
 [build]
 # Rojo writes the place file here when `rojo build` is run without -o.
-output = "GlitchTide.rbxl"
+output = "game.rbxl"
 
 [serve]
 port = 34872

@@ -1,0 +1,4 @@
+*.rbxl binary
+*.rbxlx binary
+*.rbxm binary
+vendor/makefun-roblox.ts text eol=lf
