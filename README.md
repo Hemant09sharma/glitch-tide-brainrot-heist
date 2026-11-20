@@ -46,6 +46,23 @@ unchanged (see `QA_TEST_REPORT.md` §13).
 
 ---
 
+## make.fun entry (roblox-brainrot-01) — R5 package, 2026-11-20
+
+> This section supersedes the v1.1.0 status note below for build facts.
+
+- **Source:** R5 release, GitHub `r5-release` @ `e0f30a5efb8c4d1dd928fd409847365068bbeca0` (68 Luau scripts under `src/`).
+- **Place file:** `game.rbxl` at the repo root, built with Rojo 7.7.1:
+  `rojo build default.project.json --output game.rbxl` — 676,532 bytes,
+  SHA-256 `1bf97d320c98c6b96f471d7b97bbc676ef77147f2f8c0cd1408161178d369f66` (two builds byte-identical).
+  The old `GlitchTide.rbxl` (v1.1.0) is **not** used.
+- **Entry program:** `main.ts` (Node 22.18+, standard library only) copies `game.rbxl`, `src/`, `screenshots/`, `PLAY.json`
+  to `/output` and writes `dossier.json` with the kit's unmodified `vendor/makefun-roblox.ts`:
+  `mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts`
+- **Still required before submitting** (see `SUBMISSION_CHECKLIST.md` and `HANDOFF_TO_GROK_BUILD.md`):
+  publish the place Public on Roblox, add the play code to its description, upload icon + thumbnail,
+  capture 3–4 real Studio screenshots into `screenshots/`, write the real `PLAY.json`, and sealed
+  make.fun recordings of the building agent sessions.
+
 ## 1. The game at a glance
 
 | Item | Detail |

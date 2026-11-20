@@ -22,3 +22,6 @@ Thumbs.db
 # Logs and temp files
 *.log
 *.tmp
+
+# make.fun submission: the built place must be committed (kit requires game.rbxl at repo root)
+!game.rbxl

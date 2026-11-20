@@ -1,0 +1,3 @@
+main.ts: missing required input(s) beside main.ts: PLAY.json (file)
+game.rbxl: rojo build default.project.json --output game.rbxl; PLAY.json: the published Public place (see HANDOFF_TO_GROK_BUILD.md).
+exit=1

@@ -1,0 +1,1 @@
+luau-compile src: ok=68 fail=0

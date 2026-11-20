@@ -1,0 +1,13 @@
+file:///tmp/mt/copy/vendor/makefun-roblox.ts:964
+  if (shotNames.length === 0) throw new DossierError('buildDossier: screenshots/ holds no image: the first is the cover');
+                                    ^
+
+DossierError: buildDossier: screenshots/ holds no image: the first is the cover
+    at buildDossier (file:///tmp/mt/copy/vendor/makefun-roblox.ts:964:37)
+    at file:///tmp/mt/copy/main.ts:64:3
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:681:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)
+
+Node.js v22.23.5
+exit=1

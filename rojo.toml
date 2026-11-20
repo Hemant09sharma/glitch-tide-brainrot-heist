@@ -1,10 +1,10 @@
 # Rojo configuration for Glitch Tide — Brainrot Heist: The Memeverse
-# Build with: rojo build -o GlitchTide.rbxl
+# Build with: rojo build default.project.json --output game.rbxl
 # Serve with: rojo serve
 
 [build]
 # Rojo writes the place file here when `rojo build` is run without -o.
-output = "GlitchTide.rbxl"
+output = "game.rbxl"
 
 [serve]
 port = 34872

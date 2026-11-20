@@ -43,3 +43,15 @@ is assembled in code from primitive parts and props.
 No third-party component is listed above because none is reused.
 If a third-party component is added later, it must be recorded here
 with its URL, licence, version, and modifications before release.
+
+## make.fun kit file (bundled for the competition entry)
+
+- **`vendor/makefun-roblox.ts`** — make.fun's Roblox place library, copied
+  byte-for-byte and unmodified from the official `roblox-brainrot-01` kit
+  (`starter/vendor/makefun-roblox.ts`, SHA-256
+  `0add43584f2037edee560834c3d04c05c092071eb0007856e8ff199eb5c6f550`).
+  The kit's starter is published under the MIT License
+  (`SPDX-License-Identifier: MIT`, "Copyright (c) 2026 the make.fun team").
+  It is used only by `main.ts` to write `dossier.json`; it is not part of the
+  game place.
+- **`main.ts`** is adapted from the kit starter's `main.ts` (MIT, make.fun team).
